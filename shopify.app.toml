@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "6abc51f0fb1a1e9b28cf12358a7dae89"
-application_url = "https://example.com"
+application_url = "https://spinwheel.app.sirpisoftwares.com"
 embedded = true
 name = "ConvertSpin-Spin-wheel-popup"
 
@@ -46,9 +46,9 @@ api_version = "2026-10"
 
 [auth]
 redirect_urls = [
-  "https://example.com/auth/callback",
-  "https://example.com/auth/shopify/callback",
-  "https://example.com/api/auth"
+  "https://spinwheel.app.sirpisoftwares.com/auth/callback",
+  "https://spinwheel.app.sirpisoftwares.com/auth/shopify/callback",
+  "https://spinwheel.app.sirpisoftwares.com/api/auth"
 ]
 
 [app_proxy]
