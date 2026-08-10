@@ -1,0 +1,22 @@
+{% comment %}
+  Convert Spin Wheel Inline Section Block (App Block)
+{% endcomment %}
+
+<div class="cs-inline-section-wrapper" style="width: 100%; max-width: 900px; margin: 30px auto; padding: 15px;">
+  <div id="convert-spin-root" 
+       data-shop="{{ shop.permanent_domain }}" 
+       data-cart-total="{{ cart.total_price | money_without_currency | remove: ',' }}"
+       data-page-url="{{ request.path }}"
+       data-mode="inline">
+  </div>
+</div>
+
+{% schema %}
+{
+  "name": "Convert Spin Inline Wheel",
+  "target": "section",
+  "stylesheet": "convert-spin.css",
+  "javascript": "convert-spin.js",
+  "settings": []
+}
+{% endschema %}

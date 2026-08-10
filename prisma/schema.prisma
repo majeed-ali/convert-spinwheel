@@ -1,0 +1,117 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model Shop {
+  id                          String          @id @default(uuid())
+  shopifyDomain               String          @unique
+  accessToken                 String?
+  currentPlan                 String          @default("FREE") // FREE, BASIC, GROW, ADVANCED
+  monthlyImpressionsCount     Int             @default(0)
+  billingCycleStartDate       DateTime        @default(now())
+  usageSubscriptionLineItemId String?
+  klaviyoApiKey               String?
+  mailchimpApiKey             String?
+  sendgridApiKey              String?
+  createdAt                   DateTime        @default(now())
+  updatedAt                   DateTime        @updatedAt
+
+  campaigns                   Campaign[]
+  leads                       Lead[]
+  impressionLogs              ImpressionLog[]
+}
+
+model Campaign {
+  id            String         @id @default(uuid())
+  shopId        String
+  name          String
+  type          String         @default("POPUP") // POPUP, EMBED
+  status        String         @default("ACTIVE") // ACTIVE, DRAFT
+  isABTest      Boolean        @default(false)
+  triggers      String         @default("{}") // JSON string: { exitIntent: true, scrollDepth: 50, timeDelay: 5, pageUrlRules: [], cartValueMin: 0 }
+  themeSettings String         @default("{}") // JSON string: styling, text, launcher options
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  shop          Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  segments      WheelSegment[]
+  leads         Lead[]
+  impressionLogs ImpressionLog[]
+}
+
+model WheelSegment {
+  id             String   @id @default(uuid())
+  campaignId     String
+  label          String
+  discountType   String   @default("PERCENTAGE") // PERCENTAGE, FIXED_AMOUNT, FREE_SHIPPING, BOGO, TRY_AGAIN
+  discountValue  String   @default("10")
+  customCode     String?  @default("")
+  winProbability Float    @default(10.0)
+  hexColor       String   @default("#3B82F6")
+  position       Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  campaign       Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model Lead {
+  id               String   @id @default(uuid())
+  shopId           String
+  campaignId       String?
+  email            String?
+  phone            String?
+  wonCode          String?
+  wonDiscountLabel String?
+  ipAddress        String?
+  deviceType       String?  @default("desktop")
+  sessionHash      String?
+  convertedAt      DateTime @default(now())
+
+  shop             Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  campaign         Campaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, email])
+  @@index([shopId, phone])
+}
+
+model ImpressionLog {
+  id          String   @id @default(uuid())
+  shopId      String
+  campaignId  String?
+  sessionHash String?
+  timestamp   DateTime @default(now())
+
+  shop        Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  campaign    Campaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, timestamp])
+}

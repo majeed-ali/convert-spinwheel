@@ -1,0 +1,5 @@
+api_version = "2026-07"
+name = "Convert Spin Wheel Embed"
+handle = "convert-spin-extension"
+type = "theme"
+uid = "c406f0db-821c-8975-50d3-6015e9509a93b22acf1a"

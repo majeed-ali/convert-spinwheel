@@ -1,0 +1,19 @@
+{% comment %}
+  Convert Spin Wheel App Embed Block
+{% endcomment %}
+
+<div id="convert-spin-root" 
+     data-shop="{{ shop.permanent_domain }}" 
+     data-cart-total="{{ cart.total_price | money_without_currency | remove: ',' }}"
+     data-page-url="{{ request.path }}">
+</div>
+
+{% schema %}
+{
+  "name": "Spin Wheel Pop-Up",
+  "target": "body",
+  "stylesheet": "convert-spin.css",
+  "javascript": "convert-spin.js",
+  "settings": []
+}
+{% endschema %}
