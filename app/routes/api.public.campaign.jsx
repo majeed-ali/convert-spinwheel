@@ -1,5 +1,17 @@
 import prisma from "../db.server";
 
+function parseJsonField(value, fallback) {
+  if (typeof value !== "string") {
+    return value ?? fallback;
+  }
+
+  try {
+    return JSON.parse(value || "{}");
+  } catch (_error) {
+    return fallback;
+  }
+}
+
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
   const shopDomain = url.searchParams.get("shop");
@@ -79,8 +91,8 @@ export const loader = async ({ request }) => {
       id: selectedCampaign.id,
       name: selectedCampaign.name,
       type: selectedCampaign.type,
-      triggers: typeof selectedCampaign.triggers === "string" ? JSON.parse(selectedCampaign.triggers || "{}") : selectedCampaign.triggers,
-      themeSettings: typeof selectedCampaign.themeSettings === "string" ? JSON.parse(selectedCampaign.themeSettings || "{}") : selectedCampaign.themeSettings,
+      triggers: parseJsonField(selectedCampaign.triggers, {}),
+      themeSettings: parseJsonField(selectedCampaign.themeSettings, {}),
       segments: segments.map((s) => ({
         id: s.id,
         label: s.label,

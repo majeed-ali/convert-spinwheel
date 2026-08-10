@@ -21,6 +21,18 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { getOrInitShop } from "../services/billing.server";
 
+function parseJsonField(value, fallback) {
+  if (typeof value !== "string") {
+    return value ?? fallback;
+  }
+
+  try {
+    return JSON.parse(value || "{}");
+  } catch (_error) {
+    return fallback;
+  }
+}
+
 export const loader = async ({ request, params }) => {
   const { session } = await authenticate.admin(request);
   const { id } = params;
@@ -81,8 +93,8 @@ export const loader = async ({ request, params }) => {
     throw new Response("Campaign Not Found", { status: 404 });
   }
 
-  const triggers = typeof campaign.triggers === "string" ? JSON.parse(campaign.triggers || "{}") : campaign.triggers;
-  const themeSettings = typeof campaign.themeSettings === "string" ? JSON.parse(campaign.themeSettings || "{}") : campaign.themeSettings;
+  const triggers = parseJsonField(campaign.triggers, {});
+  const themeSettings = parseJsonField(campaign.themeSettings, {});
 
   return JSON.parse(JSON.stringify({ campaign, triggers, themeSettings }));
 };

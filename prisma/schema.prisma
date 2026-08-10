@@ -1,13 +1,12 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// Prisma Schema optimized for PostgreSQL / MySQL in Production with Strategic High-Performance Indexes
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Session {
@@ -28,6 +27,8 @@ model Session {
   emailVerified       Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
+
+  @@index([shop, isOnline])
 }
 
 model Shop {
@@ -47,17 +48,19 @@ model Shop {
   campaigns                   Campaign[]
   leads                       Lead[]
   impressionLogs              ImpressionLog[]
+
+  @@index([shopifyDomain])
 }
 
 model Campaign {
   id            String         @id @default(uuid())
   shopId        String
   name          String
-  type          String         @default("POPUP") // POPUP, EMBED
+  type          String         @default("POPUP") // POPUP, EMBED, SLIDE_IN
   status        String         @default("ACTIVE") // ACTIVE, DRAFT
   isABTest      Boolean        @default(false)
-  triggers      String         @default("{}") // JSON string: { exitIntent: true, scrollDepth: 50, timeDelay: 5, pageUrlRules: [], cartValueMin: 0 }
-  themeSettings String         @default("{}") // JSON string: styling, text, launcher options
+  triggers      String         @default("{}") // JSON string
+  themeSettings String         @default("{}") // JSON string
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
@@ -65,13 +68,15 @@ model Campaign {
   segments      WheelSegment[]
   leads         Lead[]
   impressionLogs ImpressionLog[]
+
+  @@index([shopId, status])
 }
 
 model WheelSegment {
   id             String   @id @default(uuid())
   campaignId     String
   label          String
-  discountType   String   @default("PERCENTAGE") // PERCENTAGE, FIXED_AMOUNT, FREE_SHIPPING, BOGO, TRY_AGAIN
+  discountType   String   @default("PERCENTAGE") // PERCENTAGE, FIXED_AMOUNT, FREE_SHIPPING, TRY_AGAIN
   discountValue  String   @default("10")
   customCode     String?  @default("")
   winProbability Float    @default(10.0)
@@ -81,6 +86,8 @@ model WheelSegment {
   updatedAt      DateTime @updatedAt
 
   campaign       Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, position])
 }
 
 model Lead {
@@ -101,6 +108,7 @@ model Lead {
 
   @@index([shopId, email])
   @@index([shopId, phone])
+  @@index([shopId, ipAddress, convertedAt])
 }
 
 model ImpressionLog {
@@ -114,4 +122,5 @@ model ImpressionLog {
   campaign    Campaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
   @@index([shopId, timestamp])
+  @@index([timestamp])
 }

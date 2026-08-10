@@ -24,7 +24,6 @@ export default function App() {
           <a href="/app/campaigns">Campaigns & Wheel Builder</a>
           <a href="/app/leads">Leads & Opt-ins</a>
           <a href="/app/billing">Plans & Billing</a>
-          <a href="/app/developer-analytics">Developer Analytics</a>
           <a href="/app/settings">Integrations</a>
         </ui-nav-menu>
         <Outlet />
