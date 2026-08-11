@@ -8,13 +8,23 @@ export const loader = async () => {
 export const action = async ({ request }) => {
   try {
     const { topic, shop, payload } = await authenticate.webhook(request);
-    console.log(`[GDPR Webhook] ${topic} received for ${shop}`, payload);
+    const shopDomain = shop || payload?.shop_domain;
+    const shopId = payload?.shop_id;
+
+    console.log(`[GDPR Webhook] ${topic} received for ${shopDomain} (Shop ID: ${shopId})`, payload);
 
     const customerEmail = payload?.customer?.email;
     const customerPhone = payload?.customer?.phone;
 
-    if (customerEmail || customerPhone) {
-      const dbShop = await prisma.shop.findUnique({ where: { shopifyDomain: shop } });
+    if ((customerEmail || customerPhone) && shopDomain) {
+      const dbShop = await prisma.shop.findFirst({
+        where: {
+          OR: [
+            { shopifyDomain: shopDomain },
+            { shopifyDomain: { contains: shopDomain } },
+          ],
+        },
+      });
       if (dbShop) {
         await prisma.lead.deleteMany({
           where: {

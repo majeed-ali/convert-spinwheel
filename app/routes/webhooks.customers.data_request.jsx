@@ -7,9 +7,12 @@ export const loader = async () => {
 export const action = async ({ request }) => {
   try {
     const { topic, shop, payload } = await authenticate.webhook(request);
-    console.log(`[GDPR Webhook] ${topic} received for ${shop}`, payload);
+    const shopDomain = shop || payload?.shop_domain;
+    const shopId = payload?.shop_id;
+
+    console.log(`[GDPR Webhook] ${topic} received for ${shopDomain} (Shop ID: ${shopId})`, payload);
   } catch (error) {
-    console.warn("[GDPR Webhook] customers/data_request webhook auth check:", error?.message || error);
+    console.warn("[GDPR Webhook] customers/data_request webhook check:", error?.message || error);
   }
 
   return new Response("OK", { status: 200 });

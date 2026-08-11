@@ -40,17 +40,10 @@ api_version = "2026-10"
   uri = "/webhooks/app/subscriptions_update"
   topics = [ "app/subscriptions_update" ]
 
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/customers/data_request"
-  compliance_topics = [ "customers/data_request" ]
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/customers/redact"
-  compliance_topics = [ "customers/redact" ]
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/shop/redact"
-  compliance_topics = [ "shop/redact" ]
+  [webhooks.privacy_compliance]
+  customer_data_request_url = "https://spinwheel.app.sirpisoftwares.com/webhooks/customers/data_request"
+  customer_deletion_url = "https://spinwheel.app.sirpisoftwares.com/webhooks/customers/redact"
+  shop_deletion_url = "https://spinwheel.app.sirpisoftwares.com/webhooks/shop/redact"
 
 [auth]
 redirect_urls = [
