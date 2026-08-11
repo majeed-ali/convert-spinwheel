@@ -93,18 +93,14 @@ export const action = async ({ request }) => {
 
     if (data?.userErrors?.length) {
       console.error("Subscription user errors:", data.userErrors);
+      return Response.json({ error: data.userErrors[0].message || "Failed to create subscription" }, { status: 400 });
     }
   } catch (e) {
     console.error("Billing Subscription Error:", e);
+    return Response.json({ error: "Billing subscription request failed" }, { status: 500 });
   }
 
-  // Fallback update for dev test mode
-  await prisma.shop.update({
-    where: { id: shop.id },
-    data: { currentPlan: planKey },
-  });
-
-  return Response.json({ success: true, message: `Switched to ${selectedTier.name}` });
+  return Response.json({ error: "Unable to obtain confirmation URL from Shopify Billing API" }, { status: 400 });
 };
 
 export default function BillingPage() {
