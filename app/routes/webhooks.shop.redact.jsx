@@ -1,4 +1,4 @@
-import { authenticate } from "../shopify.server";
+import { authenticate, verifyShopifyHmac } from "../shopify.server";
 import prisma from "../db.server";
 
 export const loader = async () => {
@@ -6,13 +6,14 @@ export const loader = async () => {
 };
 
 export const action = async ({ request }) => {
+  const { valid, payload, shopDomain } = await verifyShopifyHmac(request);
+  if (!valid) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  console.log(`[GDPR Webhook] shop/redact received for ${shopDomain}`, payload);
+
   try {
-    const { topic, shop, payload } = await authenticate.webhook(request);
-    const shopDomain = shop || payload?.shop_domain;
-    const shopId = payload?.shop_id;
-
-    console.log(`[GDPR Webhook] ${topic} received for ${shopDomain} (Shop ID: ${shopId})`, payload);
-
     if (shopDomain) {
       const dbShop = await prisma.shop.findFirst({
         where: {
