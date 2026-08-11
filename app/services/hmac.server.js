@@ -2,8 +2,12 @@ import crypto from "crypto";
 
 export async function verifyShopifyHmac(request) {
   const hmacHeader = request.headers.get("x-shopify-hmac-sha256");
+  const topicHeader = request.headers.get("x-shopify-topic");
+  const shopHeader = request.headers.get("x-shopify-shop-domain");
+
   if (!hmacHeader) {
-    return { valid: false, payload: null, shopDomain: null };
+    console.log(`[HMAC DEBUG] Failed: Missing x-shopify-hmac-sha256 header (Topic: ${topicHeader || 'unknown'}, Shop: ${shopHeader || 'unknown'})`);
+    return { valid: false, payload: null, shopDomain: null, reason: "Missing x-shopify-hmac-sha256 header" };
   }
 
   try {
@@ -11,23 +15,48 @@ export async function verifyShopifyHmac(request) {
     const rawBody = await clonedRequest.text();
 
     const apiSecret = process.env.SHOPIFY_API_SECRET || "";
+    if (!apiSecret) {
+      console.error("[HMAC DEBUG] CRITICAL: SHOPIFY_API_SECRET environment variable is missing or empty!");
+    }
+
     const calculatedHmac = crypto
       .createHmac("sha256", apiSecret)
       .update(rawBody, "utf8")
       .digest("base64");
 
-    const hmacBuffer = Buffer.from(hmacHeader, "utf8");
-    const calcBuffer = Buffer.from(calculatedHmac, "utf8");
+    const receivedHmac = hmacHeader.trim();
+    const computedHmac = calculatedHmac.trim();
 
-    if (hmacBuffer.length !== calcBuffer.length || !crypto.timingSafeEqual(hmacBuffer, calcBuffer)) {
-      return { valid: false, payload: null, shopDomain: null };
+    const hmacBuffer = Buffer.from(receivedHmac, "utf8");
+    const calcBuffer = Buffer.from(computedHmac, "utf8");
+
+    let isValid = false;
+    if (hmacBuffer.length === calcBuffer.length && crypto.timingSafeEqual(hmacBuffer, calcBuffer)) {
+      isValid = true;
     }
 
-    const payload = JSON.parse(rawBody || "{}");
-    const shopDomain = request.headers.get("x-shopify-shop-domain") || payload?.shop_domain || null;
+    let payload = {};
+    try {
+      payload = JSON.parse(rawBody || "{}");
+    } catch (_e) {
+      payload = {};
+    }
 
-    return { valid: true, payload, shopDomain };
-  } catch (_e) {
-    return { valid: false, payload: null, shopDomain: null };
+    const shopDomain = shopHeader || payload?.shop_domain || null;
+
+    console.log(`[HMAC DEBUG] Result: ${isValid ? "VALID (200)" : "INVALID (401)"}`, {
+      topic: topicHeader,
+      shopDomain,
+      receivedHmac,
+      computedHmac,
+      apiSecretConfigured: !!apiSecret,
+      rawBodyLength: rawBody.length,
+      rawBodySnippet: rawBody.substring(0, 150),
+    });
+
+    return { valid: isValid, payload, shopDomain, rawBody };
+  } catch (err) {
+    console.error("[HMAC DEBUG] Exception during HMAC check:", err);
+    return { valid: false, payload: null, shopDomain: null, reason: err?.message };
   }
 }

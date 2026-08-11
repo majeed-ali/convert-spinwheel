@@ -8,7 +8,7 @@ export const loader = async () => {
 export const action = async ({ request }) => {
   const { valid, payload, shopDomain } = await verifyShopifyHmac(request);
   if (!valid) {
-    return new Response("Unauthorized", { status: 401 });
+    return new Response("Bad Request", { status: 400 });
   }
 
   console.log(`[GDPR Webhook] shop/redact received for ${shopDomain}`, payload);
