@@ -1,4 +1,4 @@
-import { authenticate, verifyShopifyHmac } from "../shopify.server";
+import { verifyShopifyHmac } from "../services/hmac.server";
 import prisma from "../db.server";
 
 export const loader = async () => {

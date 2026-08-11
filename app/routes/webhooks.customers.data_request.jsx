@@ -1,4 +1,4 @@
-import { authenticate, verifyShopifyHmac } from "../shopify.server";
+import { verifyShopifyHmac } from "../services/hmac.server";
 
 export const loader = async () => {
   return new Response("OK", { status: 200 });
