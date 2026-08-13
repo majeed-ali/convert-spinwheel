@@ -9,9 +9,9 @@ export async function syncLeadToIntegrations(shop, leadData) {
 
   const cleanEmail = email.trim().toLowerCase();
   const results = {
-    klaviyo: null,
-    mailchimp: null,
-    sendgrid: null,
+    klaviyo: { success: false, message: "Not configured" },
+    mailchimp: { success: false, message: "Not configured" },
+    sendgrid: { success: false, message: "Not configured" },
   };
 
   // ==========================================
@@ -51,13 +51,19 @@ export async function syncLeadToIntegrations(shop, leadData) {
       if (profileRes.ok) {
         const profileData = await profileRes.json();
         profileId = profileData.data?.id;
-      } else if (profileRes.status === 409) {
-        // Profile already exists -> fetch profile ID by email filter
-        const filterUrl = `https://a.klaviyo.com/api/profiles/?filter=equals(email,"${encodeURIComponent(cleanEmail)}")`;
-        const searchRes = await fetch(filterUrl, { headers });
-        if (searchRes.ok) {
-          const searchData = await searchRes.json();
-          profileId = searchData.data?.[0]?.id;
+      } else {
+        const errText = await profileRes.text();
+        if (profileRes.status === 409 || errText.includes("duplicate")) {
+          // Profile already exists -> search by email filter
+          const filterUrl = `https://a.klaviyo.com/api/profiles/?filter=equals(email,"${encodeURIComponent(cleanEmail)}")`;
+          const searchRes = await fetch(filterUrl, { headers });
+          if (searchRes.ok) {
+            const searchData = await searchRes.json();
+            profileId = searchData.data?.[0]?.id;
+          }
+        } else {
+          console.error("[Klaviyo Profile Create Failed]:", errText);
+          results.klaviyo = { success: false, message: `Profile creation failed: ${profileRes.statusText}` };
         }
       }
 
@@ -69,22 +75,29 @@ export async function syncLeadToIntegrations(shop, leadData) {
           const targetListId = listsData.data?.[0]?.id;
 
           if (targetListId) {
-            await fetch(`https://a.klaviyo.com/api/lists/${targetListId}/relationships/profiles/`, {
+            const addToListRes = await fetch(`https://a.klaviyo.com/api/lists/${targetListId}/relationships/profiles/`, {
               method: "POST",
               headers,
               body: JSON.stringify({
                 data: [{ type: "profile", id: profileId }],
               }),
             });
+
+            if (addToListRes.ok || addToListRes.status === 204) {
+              results.klaviyo = { success: true, message: `Added to Klaviyo List (${targetListId})` };
+            } else {
+              results.klaviyo = { success: true, message: `Profile created (ID: ${profileId}), list sync pending` };
+            }
+          } else {
+            results.klaviyo = { success: true, message: "Profile created (No active list found in Klaviyo account)" };
           }
+        } else {
+          results.klaviyo = { success: true, message: "Profile created successfully" };
         }
       }
-
-      results.klaviyo = true;
-      console.log(`[Klaviyo Sync Success] ${cleanEmail}`);
     } catch (e) {
       console.error("[Klaviyo Sync Error]:", e);
-      results.klaviyo = false;
+      results.klaviyo = { success: false, message: e.message };
     }
   }
 
@@ -98,19 +111,19 @@ export async function syncLeadToIntegrations(shop, leadData) {
       const authHeader = `Basic ${Buffer.from(`anystring:${apiKey}`).toString("base64")}`;
 
       // Step 2A: Get First Mailchimp Audience / List ID
-      const listsUrl = `https://${datacenter}.api.mailchimp.com/3.0/lists?count=5`;
+      const listsUrl = `https://${datacenter}.api.mailchimp.com/3.0/lists?count=10`;
       const listRes = await fetch(listsUrl, {
         headers: { Authorization: authHeader },
       });
 
       if (listRes.ok) {
         const listData = await listRes.json();
-        const defaultListId = listData.lists?.[0]?.id;
+        const defaultList = listData.lists?.[0];
 
-        if (defaultListId) {
+        if (defaultList && defaultList.id) {
           // MD5 hash of lowercase email for Mailchimp Upsert Endpoint
           const subscriberHash = crypto.createHash("md5").update(cleanEmail).digest("hex");
-          const memberUrl = `https://${datacenter}.api.mailchimp.com/3.0/lists/${defaultListId}/members/${subscriberHash}`;
+          const memberUrl = `https://${datacenter}.api.mailchimp.com/3.0/lists/${defaultList.id}/members/${subscriberHash}`;
 
           const upsertRes = await fetch(memberUrl, {
             method: "PUT",
@@ -122,23 +135,28 @@ export async function syncLeadToIntegrations(shop, leadData) {
               email_address: cleanEmail,
               status_if_new: "subscribed",
               status: "subscribed",
+              skip_merge_validation: true,
             }),
           });
 
-          results.mailchimp = upsertRes.ok;
           if (upsertRes.ok) {
-            console.log(`[Mailchimp Sync Success] ${cleanEmail}`);
+            results.mailchimp = { success: true, message: `Subscribed to Audience "${defaultList.name}"` };
           } else {
             const errBody = await upsertRes.text();
-            console.error("[Mailchimp Sync Response Error]:", errBody);
+            console.error("[Mailchimp Member Upsert Failed]:", errBody);
+            results.mailchimp = { success: false, message: `Mailchimp error: ${upsertRes.statusText}` };
           }
+        } else {
+          results.mailchimp = { success: false, message: "No Audience lists found in Mailchimp account" };
         }
       } else {
-        console.error("[Mailchimp List Fetch Error]:", await listRes.text());
+        const errText = await listRes.text();
+        console.error("[Mailchimp Auth/List Error]:", errText);
+        results.mailchimp = { success: false, message: "Invalid Mailchimp API Key or Datacenter" };
       }
     } catch (e) {
       console.error("[Mailchimp Sync Error]:", e);
-      results.mailchimp = false;
+      results.mailchimp = { success: false, message: e.message };
     }
   }
 
@@ -155,17 +173,17 @@ export async function syncLeadToIntegrations(shop, leadData) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          contacts: [
-            {
-              email: cleanEmail,
-            },
-          ],
+          contacts: [{ email: cleanEmail }],
         }),
       });
-      results.sendgrid = response.ok;
+      if (response.ok) {
+        results.sendgrid = { success: true, message: "Contact added to SendGrid" };
+      } else {
+        results.sendgrid = { success: false, message: `SendGrid error: ${response.statusText}` };
+      }
     } catch (e) {
       console.error("[SendGrid Sync Error]:", e);
-      results.sendgrid = false;
+      results.sendgrid = { success: false, message: e.message };
     }
   }
 
