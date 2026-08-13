@@ -142,9 +142,10 @@ export async function syncLeadToIntegrations(shop, leadData) {
           if (upsertRes.ok) {
             results.mailchimp = { success: true, message: `Subscribed to Audience "${defaultList.name}"` };
           } else {
-            const errBody = await upsertRes.text();
-            console.error("[Mailchimp Member Upsert Failed]:", errBody);
-            results.mailchimp = { success: false, message: `Mailchimp error: ${upsertRes.statusText}` };
+            const errData = await upsertRes.json().catch(() => null);
+            const detailMsg = errData?.detail || errData?.title || upsertRes.statusText;
+            console.error("[Mailchimp Member Upsert Failed]:", errData);
+            results.mailchimp = { success: false, message: `Mailchimp error: ${detailMsg}` };
           }
         } else {
           results.mailchimp = { success: false, message: "No Audience lists found in Mailchimp account" };

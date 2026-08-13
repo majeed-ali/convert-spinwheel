@@ -36,7 +36,7 @@ export const action = async ({ request }) => {
   let testResults = null;
   if (intent === "test") {
     testResults = await syncLeadToIntegrations(updatedShop, {
-      email: `test_spinwheel_${Date.now()}@example.com`,
+      email: `test_spinwheel_${Date.now()}@gmail.com`,
       wonCode: "TEST10OFF",
       wonDiscountLabel: "10% OFF Test",
     });
