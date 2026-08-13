@@ -4,7 +4,7 @@ import { Page, Card, TextField, Button, Banner, BlockStack, InlineStack, Text, B
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { getOrInitShop } from "../services/billing.server";
-import { syncLeadToIntegrations } from "../services/integrations.server";
+import { testIntegrationKeys } from "../services/integrations.server";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -35,16 +35,12 @@ export const action = async ({ request }) => {
 
   let testResults = null;
   if (intent === "test") {
-    testResults = await syncLeadToIntegrations(updatedShop, {
-      email: `test_spinwheel_${Date.now()}@gmail.com`,
-      wonCode: "TEST10OFF",
-      wonDiscountLabel: "10% OFF Test",
-    });
+    testResults = await testIntegrationKeys(updatedShop);
   }
 
   return Response.json({
     success: true,
-    message: intent === "test" ? "Integration settings saved & live test triggered!" : "Integrations settings saved successfully!",
+    message: intent === "test" ? "Integration settings saved & API connection validated!" : "Integrations settings saved successfully!",
     testResults,
   });
 };
@@ -80,7 +76,7 @@ export default function SettingsPage() {
         )}
 
         {testResults && (
-          <Banner title="Live Integration Test Results" status="info">
+          <Banner title="Live Connection Status" status="info">
             <BlockStack gap="200">
               {testResults.klaviyo && (
                 <Text as="p">
@@ -154,7 +150,7 @@ export default function SettingsPage() {
 
         <InlineStack align="end" gap="300">
           <Button onClick={() => handleSave("test")} loading={false}>
-            Save & Test Sync
+            Test Connection
           </Button>
           <Button variant="primary" onClick={() => handleSave("save")}>
             Save Settings

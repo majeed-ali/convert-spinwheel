@@ -49,7 +49,7 @@ export const action = async ({ request }) => {
 
   return Response.json({
     success: true,
-    message: `Successfully forwarded all ${syncedCount} existing lead(s) to Mailchimp & Klaviyo with tag "shopify-convert-spin-wheel"!`,
+    message: `Successfully synced ${syncedCount} lead(s) to Mailchimp & Klaviyo with tag "shopify-convert-spin-wheel"!`,
   });
 };
 
@@ -125,7 +125,7 @@ export default function LeadsPage() {
             loading={isSyncing && !actionData}
             disabled={leads.length === 0}
           >
-            Sync All {leads.length} Existing Leads to Integrations
+            Sync all leads to connected services
           </Button>
         </InlineStack>
 

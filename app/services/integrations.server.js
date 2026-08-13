@@ -17,7 +17,7 @@ export async function syncLeadToIntegrations(shop, leadData) {
   const tagLabel = "shopify-convert-spin-wheel";
 
   // ==========================================
-  // 1. KLAVIYO INTEGRATION (Profile + List Sync + Tags)
+  // 1. KLAVIYO INTEGRATION (Profile + List Sync + Tag)
   // ==========================================
   if (shop.klaviyoApiKey) {
     try {
@@ -29,7 +29,7 @@ export async function syncLeadToIntegrations(shop, leadData) {
         revision: "2023-10-15",
       };
 
-      // Step 1A: Create or update Klaviyo Profile with tags & properties
+      // Step 1A: Create or update Klaviyo Profile
       const profileRes = await fetch("https://a.klaviyo.com/api/profiles/", {
         method: "POST",
         headers,
@@ -55,17 +55,22 @@ export async function syncLeadToIntegrations(shop, leadData) {
         const profileData = await profileRes.json();
         profileId = profileData.data?.id;
       } else {
-        const errText = await profileRes.text();
-        if (profileRes.status === 409 || errText.includes("duplicate")) {
-          const filterUrl = `https://a.klaviyo.com/api/profiles/?filter=equals(email,"${encodeURIComponent(cleanEmail)}")`;
-          const searchRes = await fetch(filterUrl, { headers });
-          if (searchRes.ok) {
-            const searchData = await searchRes.json();
-            profileId = searchData.data?.[0]?.id;
+        const errJson = await profileRes.json().catch(() => null);
+        if (profileRes.status === 409 || errJson?.errors?.[0]?.code === "duplicate_profile") {
+          profileId = errJson?.errors?.[0]?.meta?.duplicate_profile_id;
+
+          if (!profileId) {
+            // Fallback search filter
+            const filterUrl = `https://a.klaviyo.com/api/profiles/?filter=equals(email,"${encodeURIComponent(cleanEmail)}")`;
+            const searchRes = await fetch(filterUrl, { headers });
+            if (searchRes.ok) {
+              const searchData = await searchRes.json();
+              profileId = searchData.data?.[0]?.id;
+            }
           }
         } else {
-          console.error("[Klaviyo Profile Create Failed]:", errText);
-          results.klaviyo = { success: false, message: `Profile creation failed: ${profileRes.statusText}` };
+          console.error("[Klaviyo Profile Create Failed]:", errJson);
+          results.klaviyo = { success: false, message: `Klaviyo error: ${profileRes.statusText}` };
         }
       }
 
@@ -86,15 +91,15 @@ export async function syncLeadToIntegrations(shop, leadData) {
             });
 
             if (addToListRes.ok || addToListRes.status === 204) {
-              results.klaviyo = { success: true, message: `Added to Klaviyo List (${targetListId})` };
+              results.klaviyo = { success: true, message: `Synced to Klaviyo List (${targetListId})` };
             } else {
-              results.klaviyo = { success: true, message: `Profile created (ID: ${profileId}), list sync pending` };
+              results.klaviyo = { success: true, message: `Profile created in Klaviyo` };
             }
           } else {
-            results.klaviyo = { success: true, message: "Profile created (No active list found in Klaviyo account)" };
+            results.klaviyo = { success: true, message: "Profile created in Klaviyo" };
           }
         } else {
-          results.klaviyo = { success: true, message: "Profile created successfully" };
+          results.klaviyo = { success: true, message: "Profile created in Klaviyo" };
         }
       }
     } catch (e) {
@@ -112,7 +117,6 @@ export async function syncLeadToIntegrations(shop, leadData) {
       const datacenter = apiKey.split("-")[1] || "us1";
       const authHeader = `Basic ${Buffer.from(`anystring:${apiKey}`).toString("base64")}`;
 
-      // Step 2A: Get First Mailchimp Audience / List ID
       const listsUrl = `https://${datacenter}.api.mailchimp.com/3.0/lists?count=10`;
       const listRes = await fetch(listsUrl, {
         headers: { Authorization: authHeader },
@@ -142,7 +146,6 @@ export async function syncLeadToIntegrations(shop, leadData) {
           });
 
           if (upsertRes.ok) {
-            // Also apply member tag endpoint explicitly to ensure tag attaches in Mailchimp UI
             const tagUrl = `https://${datacenter}.api.mailchimp.com/3.0/lists/${defaultList.id}/members/${subscriberHash}/tags`;
             await fetch(tagUrl, {
               method: "POST",
@@ -200,6 +203,60 @@ export async function syncLeadToIntegrations(shop, leadData) {
     } catch (e) {
       console.error("[SendGrid Sync Error]:", e);
       results.sendgrid = { success: false, message: e.message };
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Validate API keys without creating fake test contacts in merchant audience lists
+ */
+export async function testIntegrationKeys(shop) {
+  const results = {
+    klaviyo: { success: false, message: "Not configured" },
+    mailchimp: { success: false, message: "Not configured" },
+    sendgrid: { success: false, message: "Not configured" },
+  };
+
+  if (shop.klaviyoApiKey) {
+    try {
+      const apiKey = shop.klaviyoApiKey.trim();
+      const res = await fetch("https://a.klaviyo.com/api/lists/", {
+        headers: {
+          Authorization: `Klaviyo-API-Key ${apiKey}`,
+          revision: "2023-10-15",
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const listName = data.data?.[0]?.attributes?.name || "Klaviyo List";
+        results.klaviyo = { success: true, message: `API Key Validated (Connected to list "${listName}")` };
+      } else {
+        results.klaviyo = { success: false, message: `Invalid Klaviyo API Key (${res.statusText})` };
+      }
+    } catch (e) {
+      results.klaviyo = { success: false, message: e.message };
+    }
+  }
+
+  if (shop.mailchimpApiKey) {
+    try {
+      const apiKey = shop.mailchimpApiKey.trim();
+      const datacenter = apiKey.split("-")[1] || "us1";
+      const authHeader = `Basic ${Buffer.from(`anystring:${apiKey}`).toString("base64")}`;
+      const res = await fetch(`https://${datacenter}.api.mailchimp.com/3.0/lists?count=5`, {
+        headers: { Authorization: authHeader },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const audienceName = data.lists?.[0]?.name || "Mailchimp Audience";
+        results.mailchimp = { success: true, message: `API Key Validated (Connected to audience "${audienceName}")` };
+      } else {
+        results.mailchimp = { success: false, message: `Invalid Mailchimp API Key` };
+      }
+    } catch (e) {
+      results.mailchimp = { success: false, message: e.message };
     }
   }
 
