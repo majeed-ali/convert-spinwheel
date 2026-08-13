@@ -1,7 +1,9 @@
-import { useLoaderData } from "react-router";
-import { Page, Card, DataTable, Text, Button, InlineStack, BlockStack } from "@shopify/polaris";
+import { useState } from "react";
+import { useLoaderData, useSubmit, useActionData } from "react-router";
+import { Page, Card, DataTable, Text, Button, InlineStack, BlockStack, Banner } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { syncLeadToIntegrations } from "../services/integrations.server";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -20,8 +22,48 @@ export const loader = async ({ request }) => {
   return JSON.parse(JSON.stringify({ leads }));
 };
 
+export const action = async ({ request }) => {
+  const { session } = await authenticate.admin(request);
+  const shop = await prisma.shop.findUnique({ where: { shopifyDomain: session.shop } });
+
+  if (!shop) {
+    return Response.json({ success: false, message: "Shop not found" });
+  }
+
+  const leads = await prisma.lead.findMany({
+    where: { shopId: shop.id },
+  });
+
+  let syncedCount = 0;
+  for (const lead of leads) {
+    if (lead.email) {
+      await syncLeadToIntegrations(shop, {
+        email: lead.email,
+        phone: lead.phone,
+        wonCode: lead.wonCode,
+        wonDiscountLabel: lead.wonDiscountLabel,
+      });
+      syncedCount++;
+    }
+  }
+
+  return Response.json({
+    success: true,
+    message: `Successfully forwarded all ${syncedCount} existing lead(s) to Mailchimp & Klaviyo with tag "shopify-convert-spin-wheel"!`,
+  });
+};
+
 export default function LeadsPage() {
   const { leads } = useLoaderData();
+  const actionData = useActionData();
+  const submit = useSubmit();
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleSyncExistingLeads = () => {
+    setIsSyncing(true);
+    const formData = new FormData();
+    submit(formData, { method: "post" });
+  };
 
   const exportCSV = () => {
     if (!leads.length) return;
@@ -69,6 +111,24 @@ export default function LeadsPage() {
       }}
     >
       <BlockStack gap="500">
+        {actionData?.success && (
+          <Banner status="success" onDismiss={() => {}}>
+            {actionData.message}
+          </Banner>
+        )}
+
+        <InlineStack align="space-between" blockAlign="center">
+          <Text variant="headingSm">Manage Leads & CRM Sync</Text>
+          <Button
+            variant="primary"
+            onClick={handleSyncExistingLeads}
+            loading={isSyncing && !actionData}
+            disabled={leads.length === 0}
+          >
+            Sync All {leads.length} Existing Leads to Integrations
+          </Button>
+        </InlineStack>
+
         <Card padding="0">
           {leads.length === 0 ? (
             <div style={{ padding: "30px", textAlign: "center" }}>

@@ -14,8 +14,10 @@ export async function syncLeadToIntegrations(shop, leadData) {
     sendgrid: { success: false, message: "Not configured" },
   };
 
+  const tagLabel = "shopify-convert-spin-wheel";
+
   // ==========================================
-  // 1. KLAVIYO INTEGRATION (Profile + List Sync)
+  // 1. KLAVIYO INTEGRATION (Profile + List Sync + Tags)
   // ==========================================
   if (shop.klaviyoApiKey) {
     try {
@@ -27,7 +29,7 @@ export async function syncLeadToIntegrations(shop, leadData) {
         revision: "2023-10-15",
       };
 
-      // Step 1A: Create or update Klaviyo Profile
+      // Step 1A: Create or update Klaviyo Profile with tags & properties
       const profileRes = await fetch("https://a.klaviyo.com/api/profiles/", {
         method: "POST",
         headers,
@@ -40,7 +42,8 @@ export async function syncLeadToIntegrations(shop, leadData) {
               properties: {
                 SpinWheel_WonCode: wonCode || "",
                 SpinWheel_WonDiscount: wonDiscountLabel || "",
-                Source: "Convert Spin Wheel",
+                Source: tagLabel,
+                Tag: tagLabel,
               },
             },
           },
@@ -54,7 +57,6 @@ export async function syncLeadToIntegrations(shop, leadData) {
       } else {
         const errText = await profileRes.text();
         if (profileRes.status === 409 || errText.includes("duplicate")) {
-          // Profile already exists -> search by email filter
           const filterUrl = `https://a.klaviyo.com/api/profiles/?filter=equals(email,"${encodeURIComponent(cleanEmail)}")`;
           const searchRes = await fetch(filterUrl, { headers });
           if (searchRes.ok) {
@@ -102,7 +104,7 @@ export async function syncLeadToIntegrations(shop, leadData) {
   }
 
   // ==========================================
-  // 2. MAILCHIMP INTEGRATION (Audience Member Upsert)
+  // 2. MAILCHIMP INTEGRATION (Audience Member Upsert + Tag)
   // ==========================================
   if (shop.mailchimpApiKey) {
     try {
@@ -121,7 +123,6 @@ export async function syncLeadToIntegrations(shop, leadData) {
         const defaultList = listData.lists?.[0];
 
         if (defaultList && defaultList.id) {
-          // MD5 hash of lowercase email for Mailchimp Upsert Endpoint
           const subscriberHash = crypto.createHash("md5").update(cleanEmail).digest("hex");
           const memberUrl = `https://${datacenter}.api.mailchimp.com/3.0/lists/${defaultList.id}/members/${subscriberHash}`;
 
@@ -136,11 +137,25 @@ export async function syncLeadToIntegrations(shop, leadData) {
               status_if_new: "subscribed",
               status: "subscribed",
               skip_merge_validation: true,
+              tags: [tagLabel],
             }),
           });
 
           if (upsertRes.ok) {
-            results.mailchimp = { success: true, message: `Subscribed to Audience "${defaultList.name}"` };
+            // Also apply member tag endpoint explicitly to ensure tag attaches in Mailchimp UI
+            const tagUrl = `https://${datacenter}.api.mailchimp.com/3.0/lists/${defaultList.id}/members/${subscriberHash}/tags`;
+            await fetch(tagUrl, {
+              method: "POST",
+              headers: {
+                Authorization: authHeader,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                tags: [{ name: tagLabel, status: "active" }],
+              }),
+            });
+
+            results.mailchimp = { success: true, message: `Subscribed to Audience "${defaultList.name}" with tag "${tagLabel}"` };
           } else {
             const errData = await upsertRes.json().catch(() => null);
             const detailMsg = errData?.detail || errData?.title || upsertRes.statusText;
