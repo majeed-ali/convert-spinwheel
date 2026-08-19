@@ -1,5 +1,5 @@
-import { redirect } from "react-router";
-import { useLoaderData, useSubmit } from "react-router";
+import { useEffect } from "react";
+import { useLoaderData, useFetcher } from "react-router";
 import { Page, Card, Grid, Text, Button, Badge, BlockStack, InlineStack, Banner, ProgressBar } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -7,10 +7,55 @@ import { getOrInitShop } from "../services/billing.server";
 import { PLAN_TIERS } from "../services/plans";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const shop = await getOrInitShop(session.shop, session.accessToken);
 
-  return JSON.parse(JSON.stringify({ shop, currentPlanKey: shop.currentPlan || "FREE" }));
+  let activePlanKey = "FREE";
+  try {
+    const activeSubQuery = `#graphql
+      query getActiveSubscriptions {
+        currentAppInstallation {
+          activeSubscriptions {
+            id
+            name
+            status
+          }
+        }
+      }
+    `;
+    const subRes = await admin.graphql(activeSubQuery);
+    const subJson = await subRes.json();
+    const subs = subJson?.data?.currentAppInstallation?.activeSubscriptions || [];
+
+    if (subs.length > 0 && subs[0].status === "ACTIVE") {
+      const subName = (subs[0].name || "").toUpperCase();
+      if (subName.includes("ADVANCED")) {
+        activePlanKey = "ADVANCED";
+      } else if (subName.includes("GROW")) {
+        activePlanKey = "GROW";
+      } else if (subName.includes("BASIC")) {
+        activePlanKey = "BASIC";
+      }
+
+      if (shop.currentPlan !== activePlanKey) {
+        await prisma.shop.update({
+          where: { id: shop.id },
+          data: { currentPlan: activePlanKey },
+        });
+        shop.currentPlan = activePlanKey;
+      }
+    } else if (shop.currentPlan !== "FREE") {
+      await prisma.shop.update({
+        where: { id: shop.id },
+        data: { currentPlan: "FREE", usageSubscriptionLineItemId: null },
+      });
+      shop.currentPlan = "FREE";
+    }
+  } catch (e) {
+    console.error("[CS Billing] Loader check error:", e);
+  }
+
+  return JSON.parse(JSON.stringify({ shop, currentPlanKey: activePlanKey || shop.currentPlan || "FREE" }));
 };
 
 export const action = async ({ request }) => {
@@ -21,11 +66,46 @@ export const action = async ({ request }) => {
   const shop = await getOrInitShop(session.shop, session.accessToken);
 
   if (planKey === "FREE") {
+    try {
+      const activeSubQuery = `#graphql
+        query getActiveSubscriptions {
+          currentAppInstallation {
+            activeSubscriptions {
+              id
+              status
+            }
+          }
+        }
+      `;
+      const subRes = await admin.graphql(activeSubQuery);
+      const subJson = await subRes.json();
+      const subs = subJson?.data?.currentAppInstallation?.activeSubscriptions || [];
+      for (const sub of subs) {
+        const cancelMutation = `#graphql
+          mutation appSubscriptionCancel($id: ID!) {
+            appSubscriptionCancel(id: $id, prorate: true) {
+              appSubscription {
+                id
+                status
+              }
+              userErrors {
+                field
+                message
+              }
+            }
+          }
+        `;
+        await admin.graphql(cancelMutation, { variables: { id: sub.id } });
+      }
+    } catch (e) {
+      console.error("[CS Billing] Cancel error:", e);
+    }
+
     await prisma.shop.update({
       where: { id: shop.id },
-      data: { currentPlan: "FREE" },
+      data: { currentPlan: "FREE", usageSubscriptionLineItemId: null },
     });
-    return Response.json({ success: true });
+    return Response.json({ success: true, currentPlan: "FREE" });
   }
 
   const selectedTier = PLAN_TIERS[planKey];
@@ -33,7 +113,6 @@ export const action = async ({ request }) => {
     return Response.json({ error: "Invalid plan selected" }, { status: 400 });
   }
 
-  // Build line items array for appSubscriptionCreate
   const lineItems = [
     {
       plan: {
@@ -45,7 +124,6 @@ export const action = async ({ request }) => {
     },
   ];
 
-  // Add usage line item for Advanced Overage plan
   if (selectedTier.isOverageAllowed) {
     lineItems.push({
       plan: {
@@ -56,6 +134,8 @@ export const action = async ({ request }) => {
       },
     });
   }
+
+  const returnUrl = `https://${session.shop}/admin/apps/${process.env.SHOPIFY_API_KEY}/app/billing`;
 
   const mutation = `#graphql
     mutation appSubscriptionCreate($name: String!, $returnUrl: URL!, $lineItems: [AppSubscriptionLineItemInput!]!, $test: Boolean) {
@@ -72,15 +152,13 @@ export const action = async ({ request }) => {
     }
   `;
 
-  const returnUrl = `https://${session.shop}/admin/apps/${process.env.SHOPIFY_API_KEY}/app/billing`;
-
   try {
     const response = await admin.graphql(mutation, {
       variables: {
         name: `Convert Spin: ${selectedTier.name}`,
         returnUrl,
         lineItems,
-        test: true,
+        test: false,
       },
     });
 
@@ -88,16 +166,16 @@ export const action = async ({ request }) => {
     const data = resJson.data?.appSubscriptionCreate;
 
     if (data?.confirmationUrl) {
-      return redirect(data.confirmationUrl);
+      return Response.json({ success: true, confirmationUrl: data.confirmationUrl });
     }
 
-    if (data?.userErrors?.length) {
+    if (data?.userErrors?.length > 0) {
       console.error("Subscription user errors:", data.userErrors);
       return Response.json({ error: data.userErrors[0].message || "Failed to create subscription" }, { status: 400 });
     }
   } catch (e) {
-    console.error("Billing Subscription Error:", e);
-    return Response.json({ error: "Billing subscription request failed" }, { status: 500 });
+    console.error("[CS Billing] GraphQL Exception:", e);
+    return Response.json({ error: "Failed to initiate billing request" }, { status: 500 });
   }
 
   return Response.json({ error: "Unable to obtain confirmation URL from Shopify Billing API" }, { status: 400 });
@@ -105,19 +183,43 @@ export const action = async ({ request }) => {
 
 export default function BillingPage() {
   const { shop, currentPlanKey } = useLoaderData();
-  const submit = useSubmit();
+  const fetcher = useFetcher();
 
   const handleSelectPlan = (planKey) => {
     const formData = new FormData();
     formData.append("planKey", planKey);
-    submit(formData, { method: "post" });
+    fetcher.submit(formData, { method: "post" });
   };
 
+  useEffect(() => {
+    if (fetcher.data?.confirmationUrl) {
+      const url = fetcher.data.confirmationUrl;
+      if (typeof window !== "undefined") {
+        if (window.shopify && typeof window.shopify.open === "function") {
+          window.shopify.open(url, "_top");
+        } else if (typeof open === "function") {
+          open(url, "_top");
+        } else if (window.top) {
+          window.top.location.href = url;
+        } else {
+          window.location.href = url;
+        }
+      }
+    }
+  }, [fetcher.data]);
+
   const currentTierInfo = PLAN_TIERS[currentPlanKey] || PLAN_TIERS.FREE;
+  const isSubmitting = fetcher.state !== "idle";
 
   return (
     <Page title="Plans & Impression Tier Billing" subtitle="Simple, transparent impression-based plans with soft caps and optional overage billing.">
       <BlockStack gap="500">
+        {fetcher.data?.error && (
+          <Banner status="critical" title="Billing Error">
+            {fetcher.data.error}
+          </Banner>
+        )}
+
         <Card padding="500">
           <BlockStack gap="300">
             <InlineStack align="space-between">
@@ -144,6 +246,7 @@ export default function BillingPage() {
           {Object.keys(PLAN_TIERS).map((planKey) => {
             const plan = PLAN_TIERS[planKey];
             const isCurrent = currentPlanKey === planKey;
+            const isThisPlanSubmitting = isSubmitting && fetcher.formData?.get("planKey") === planKey;
 
             return (
               <Grid.Cell key={planKey} columnSpan={{ xs: 6, sm: 6, md: 3, lg: 3, xl: 3 }}>
@@ -179,7 +282,8 @@ export default function BillingPage() {
 
                     <Button
                       variant={isCurrent ? "secondary" : "primary"}
-                      disabled={isCurrent}
+                      disabled={isCurrent || isSubmitting}
+                      loading={isThisPlanSubmitting}
                       onClick={() => handleSelectPlan(planKey)}
                     >
                       {isCurrent ? "Current Plan" : `Upgrade to ${plan.name}`}

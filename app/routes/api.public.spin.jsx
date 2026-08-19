@@ -10,6 +10,8 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
+import { getOrInitShop, ensureDefaultCampaign } from "../services/billing.server";
+
 export const action = async ({ request }) => {
   if (request.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -19,31 +21,84 @@ export const action = async ({ request }) => {
     const body = await request.json();
     const { shopDomain, campaignId, email, phone, sessionHash, deviceType } = body;
 
-    if (!shopDomain || !campaignId) {
-      return Response.json({ error: "Missing required params" }, { status: 400, headers: corsHeaders });
-    }
+    const rawDomain = shopDomain || "";
+    const cleanDomain = rawDomain.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").trim().toLowerCase();
 
-    const shop = await prisma.shop.findUnique({
-      where: { shopifyDomain: shopDomain },
-    });
+    let campaign = null;
+    let shop = null;
 
-    if (!shop) {
-      return Response.json({ error: "Shop not found" }, { status: 404, headers: corsHeaders });
-    }
-
-    const campaign = await prisma.campaign.findUnique({
-      where: { id: campaignId },
-      include: {
-        segments: {
-          orderBy: { position: "asc" },
+    // 1. Try finding campaign directly by campaignId
+    if (campaignId) {
+      campaign = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+        include: {
+          shop: true,
+          segments: {
+            orderBy: { position: "asc" },
+          },
         },
-      },
-    });
+      });
 
-    if (!campaign || campaign.status !== "ACTIVE" || !campaign.segments.length) {
-      return Response.json({ error: "Campaign unavailable" }, { status: 400, headers: corsHeaders });
+      if (campaign) {
+        shop = campaign.shop;
+      }
     }
 
+    // 2. If not found via campaignId, lookup by shopDomain
+    if (!shop && cleanDomain) {
+      shop = await prisma.shop.findFirst({
+        where: {
+          shopifyDomain: {
+            equals: cleanDomain,
+            mode: "insensitive",
+          },
+        },
+        include: {
+          campaigns: {
+            where: { status: "ACTIVE" },
+            include: {
+              segments: { orderBy: { position: "asc" } },
+            },
+          },
+        },
+      });
+
+      if (!shop) {
+        shop = await getOrInitShop(cleanDomain);
+      }
+
+      if (shop?.campaigns?.length > 0) {
+        campaign = shop.campaigns[0];
+      }
+    }
+
+    // 3. Fallback: ensure a default active campaign exists for the shop
+    if (shop && (!campaign || !campaign.segments?.length)) {
+      campaign = await ensureDefaultCampaign(shop.id);
+    }
+
+    // 4. Global fallback to any active campaign in DB
+    if (!campaign || !campaign.segments?.length) {
+      campaign = await prisma.campaign.findFirst({
+        where: { status: "ACTIVE" },
+        include: {
+          shop: true,
+          segments: { orderBy: { position: "asc" } },
+        },
+      });
+      if (campaign) {
+        shop = campaign.shop;
+      }
+    }
+
+    if (!campaign || !shop || !campaign.segments?.length) {
+      return Response.json(
+        { success: false, error: "Campaign is currently unavailable. Please check back soon." },
+        { status: 200, headers: corsHeaders }
+      );
+    }
+
+    const canonicalShopDomain = shop.shopifyDomain || cleanDomain;
     const clientIp = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "127.0.0.1";
 
     // 1. Anti-Cheat Verification
@@ -71,20 +126,24 @@ export const action = async ({ request }) => {
       let accessToken = shop.accessToken;
       if (!accessToken) {
         const offlineSession = await prisma.session.findFirst({
-          where: { shop: shopDomain, isOnline: false },
+          where: { shop: canonicalShopDomain, isOnline: false },
         });
         accessToken = offlineSession?.accessToken;
       }
 
       if (accessToken) {
-        discountResult = await createDynamicDiscountCode(accessToken, winningSegment, campaign.name, shopDomain);
+        discountResult = await createDynamicDiscountCode(accessToken, winningSegment, campaign.name, canonicalShopDomain);
       } else {
-        const { admin } = await unauthenticated.admin(shopDomain);
-        discountResult = await createDynamicDiscountCode(admin, winningSegment, campaign.name, shopDomain);
+        try {
+          const { admin } = await unauthenticated.admin(canonicalShopDomain);
+          discountResult = await createDynamicDiscountCode(admin, winningSegment, campaign.name, canonicalShopDomain);
+        } catch (unauthErr) {
+          discountResult = await createDynamicDiscountCode(null, winningSegment, campaign.name, canonicalShopDomain);
+        }
       }
     } catch (discErr) {
       console.error("[CS Spin] Discount creation exception:", discErr);
-      discountResult = await createDynamicDiscountCode(null, winningSegment, campaign.name, shopDomain);
+      discountResult = await createDynamicDiscountCode(null, winningSegment, campaign.name, canonicalShopDomain);
     }
 
     // 4. Save Lead Record

@@ -12,5 +12,19 @@ export const action = async ({ request }) => {
     await db.session.deleteMany({ where: { shop } });
   }
 
+  // Reset shop plan to FREE and clear tokens on uninstall so reinstalls request approval again
+  try {
+    await db.shop.updateMany({
+      where: { shopifyDomain: shop },
+      data: {
+        accessToken: null,
+        currentPlan: "FREE",
+        usageSubscriptionLineItemId: null,
+      },
+    });
+  } catch (err) {
+    console.error(`[CS Webhook] Error updating shop on uninstall for ${shop}:`, err);
+  }
+
   return new Response();
 };
