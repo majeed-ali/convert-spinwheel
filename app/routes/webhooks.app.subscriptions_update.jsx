@@ -14,19 +14,15 @@ export const action = async ({ request }) => {
     let usageLineItemId = null;
 
     if (status === "ACTIVE") {
-      const name = payload.app_subscription.name || "";
-      if (name.includes("Advanced")) {
-        currentPlan = "ADVANCED";
-      } else if (name.includes("Grow")) {
-        currentPlan = "GROW";
-      } else if (name.includes("Basic")) {
+      const name = (payload.app_subscription.name || "").toUpperCase();
+      if (name.includes("PRO") || name.includes("ADVANCED")) {
+        currentPlan = "PRO";
+      } else if (name.includes("GROWTH") || name.includes("GROW")) {
+        currentPlan = "GROWTH";
+      } else if (name.includes("BASIC")) {
         currentPlan = "BASIC";
-      }
-
-      // Find usage line item ID for overage billing
-      const usageItem = lineItems.find((item) => item.plan?.pricing_details?.interval === "USAGE");
-      if (usageItem) {
-        usageLineItemId = usageItem.id;
+      } else if (name.includes("STARTER")) {
+        currentPlan = "STARTER";
       }
     }
 

@@ -1,6 +1,6 @@
 import { redirect, useLoaderData, Form } from "react-router";
 import prisma from "../db.server";
-import { PLAN_TIERS } from "../services/plans";
+import { PLAN_TIERS, getDynamicTierInfo } from "../services/plans";
 
 export const loader = async ({ request }) => {
   const cookieHeader = request.headers.get("Cookie") || "";
@@ -21,8 +21,10 @@ export const loader = async ({ request }) => {
   const totalStores = allShops.length;
 
   let freeStores = 0;
+  let starterStores = 0;
   let basicStores = 0;
-  let advancedStores = 0;
+  let growthStores = 0;
+  let proStores = 0;
   let totalImpressionsMonth = 0;
   let totalLeadsCaptured = 0;
 
@@ -30,12 +32,18 @@ export const loader = async ({ request }) => {
     totalImpressionsMonth += shop.monthlyImpressionsCount || 0;
     totalLeadsCaptured += shop._count.leads || 0;
 
-    if (shop.currentPlan === "BASIC") basicStores++;
-    else if (shop.currentPlan === "ADVANCED") advancedStores++;
+    let plan = (shop.currentPlan || "FREE").toUpperCase();
+    if (plan === "GROW") plan = "GROWTH";
+    if (plan === "ADVANCED") plan = "PRO";
+
+    if (plan === "STARTER") starterStores++;
+    else if (plan === "BASIC") basicStores++;
+    else if (plan === "GROWTH") growthStores++;
+    else if (plan === "PRO") proStores++;
     else freeStores++;
   });
 
-  const mrr = (basicStores * 9.99 + advancedStores * 29.99).toFixed(2);
+  const mrr = (starterStores * 2.99 + basicStores * 5.99 + growthStores * 9.99 + proStores * 19.99).toFixed(2);
   const arr = (parseFloat(mrr) * 12).toFixed(2);
   const totalAllTimeImpressions = await prisma.impressionLog.count();
 
@@ -44,8 +52,10 @@ export const loader = async ({ request }) => {
       allShops,
       totalStores,
       freeStores,
+      starterStores,
       basicStores,
-      advancedStores,
+      growthStores,
+      proStores,
       mrr,
       arr,
       totalImpressionsMonth,
@@ -68,8 +78,10 @@ export default function SuperAdminDashboard() {
     allShops = [],
     totalStores = 0,
     freeStores = 0,
+    starterStores = 0,
     basicStores = 0,
-    advancedStores = 0,
+    growthStores = 0,
+    proStores = 0,
     mrr = "0.00",
     arr = "0.00",
     totalImpressionsMonth = 0,
@@ -173,7 +185,7 @@ export default function SuperAdminDashboard() {
             </div>
             <div style={{ fontSize: "12px", color: "#94A3B8" }}>
               <span style={{ color: "#38BDF8" }}>{freeStores} Free</span> •{" "}
-              <span style={{ color: "#34D399" }}>{basicStores + advancedStores} Paid</span>
+              <span style={{ color: "#34D399" }}>{starterStores + basicStores + growthStores + proStores} Paid</span>
             </div>
           </div>
 
@@ -228,16 +240,21 @@ export default function SuperAdminDashboard() {
             boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.3)",
           }}
         >
-          <h2 style={{ fontSize: "18px", fontWeight: "700", margin: "0 0 20px 0", color: "#FFFFFF" }}>
-            Installed Merchant Stores Directory ({totalStores})
-          </h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+            <h2 style={{ fontSize: "18px", fontWeight: "700", margin: 0, color: "#FFFFFF" }}>
+              Installed Merchant Stores Directory ({totalStores})
+            </h2>
+            <span style={{ fontSize: "12px", color: "#94A3B8" }}>
+              ⚡ Dynamic Tier Progress (1,000 Free → 5,000 Starter → 20,000 Basic → 50,000 Growth → 150,000 Pro)
+            </span>
+          </div>
 
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "14px" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #334155", color: "#94A3B8", fontSize: "12px", textTransform: "uppercase" }}>
                   <th style={{ padding: "12px 16px" }}>Shop Domain</th>
-                  <th style={{ padding: "12px 16px" }}>Plan</th>
+                  <th style={{ padding: "12px 16px" }}>Subscribed / Dynamic Plan</th>
                   <th style={{ padding: "12px 16px" }}>Monthly Impressions</th>
                   <th style={{ padding: "12px 16px" }}>Leads Captured</th>
                   <th style={{ padding: "12px 16px" }}>Install Date</th>
@@ -252,20 +269,17 @@ export default function SuperAdminDashboard() {
                   </tr>
                 ) : (
                   allShops.map((shop) => {
-                    const planInfo = PLAN_TIERS[shop.currentPlan] || PLAN_TIERS.FREE;
-                    const limit = planInfo.monthlyImpressions || 300;
                     const count = shop.monthlyImpressionsCount || 0;
-                    const pct = Math.min(100, Math.round((count / limit) * 100));
+                    const dynamic = getDynamicTierInfo(count, shop.currentPlan);
 
-                    let badgeColor = "#38BDF8";
-                    let badgeBg = "rgba(56, 189, 248, 0.15)";
-                    if (shop.currentPlan === "BASIC") {
-                      badgeColor = "#34D399";
-                      badgeBg = "rgba(52, 211, 153, 0.15)";
-                    } else if (shop.currentPlan === "ADVANCED") {
-                      badgeColor = "#F59E0B";
-                      badgeBg = "rgba(245, 158, 11, 0.15)";
-                    }
+                    let planKey = (shop.currentPlan || "FREE").toUpperCase();
+                    if (planKey === "GROW") planKey = "GROWTH";
+                    if (planKey === "ADVANCED") planKey = "PRO";
+
+                    const currentPlanTier = PLAN_TIERS[planKey] || PLAN_TIERS.FREE;
+                    const badgeColor = currentPlanTier.badgeColor || "#38BDF8";
+                    const badgeBg = currentPlanTier.badgeBg || "rgba(56, 189, 248, 0.15)";
+                    const planLabel = currentPlanTier.key || "FREE";
 
                     return (
                       <tr key={shop.id} style={{ borderBottom: "1px solid #334155" }}>
@@ -273,27 +287,64 @@ export default function SuperAdminDashboard() {
                           {shop.shopifyDomain}
                         </td>
                         <td style={{ padding: "14px 16px" }}>
-                          <span
-                            style={{
-                              backgroundColor: badgeBg,
-                              color: badgeColor,
-                              padding: "4px 10px",
-                              borderRadius: "6px",
-                              fontSize: "12px",
-                              fontWeight: "700",
-                            }}
-                          >
-                            {shop.currentPlan}
-                          </span>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "flex-start" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                              <span
+                                style={{
+                                  backgroundColor: badgeBg,
+                                  color: badgeColor,
+                                  padding: "3px 8px",
+                                  borderRadius: "6px",
+                                  fontSize: "11px",
+                                  fontWeight: "700",
+                                }}
+                              >
+                                {planLabel}
+                              </span>
+
+                              {dynamic.isSubscribedCapExceeded && (
+                                <span
+                                  style={{
+                                    backgroundColor: "rgba(245, 158, 11, 0.15)",
+                                    color: "#FBBF24",
+                                    border: "1px solid rgba(245, 158, 11, 0.3)",
+                                    padding: "2px 6px",
+                                    borderRadius: "4px",
+                                    fontSize: "10px",
+                                    fontWeight: "700",
+                                  }}
+                                  title={`Exceeded ${dynamic.subscribedLimit} impressions. Auto-scaled tracking to ${dynamic.dynamicTierName}`}
+                                >
+                                  → {dynamic.dynamicBadge}
+                                </span>
+                              )}
+                            </div>
+
+                            {dynamic.isSubscribedCapExceeded && (
+                              <span style={{ fontSize: "11px", color: "#94A3B8" }}>
+                                Scaled to {dynamic.targetLimit.toLocaleString()} cap
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td style={{ padding: "14px 16px" }}>
-                          <div style={{ fontSize: "13px", color: "#CBD5E1", marginBottom: "4px" }}>
-                            {count.toLocaleString()} / {limit.toLocaleString()} ({pct}%)
+                          <div style={{ fontSize: "13px", color: "#CBD5E1", marginBottom: "6px", display: "flex", alignItems: "center", gap: "6px" }}>
+                            <strong>{count.toLocaleString()}</strong> / {dynamic.targetLimit.toLocaleString()}
+                            <span
+                              style={{
+                                color: dynamic.progressPercent >= 100 ? "#EF4444" : dynamic.progressPercent > 80 ? "#F59E0B" : "#A5B4FC",
+                                fontWeight: "600",
+                                fontSize: "12px",
+                              }}
+                            >
+                              ({dynamic.progressPercent}%)
+                            </span>
                           </div>
+
                           <div
                             style={{
                               width: "100%",
-                              maxWidth: "160px",
+                              maxWidth: "180px",
                               height: "6px",
                               backgroundColor: "#0F172A",
                               borderRadius: "3px",
@@ -302,11 +353,29 @@ export default function SuperAdminDashboard() {
                           >
                             <div
                               style={{
-                                width: `${pct}%`,
+                                width: `${dynamic.progressPercent}%`,
                                 height: "100%",
-                                backgroundColor: pct >= 100 ? "#EF4444" : "#6366F1",
+                                backgroundColor:
+                                  dynamic.progressPercent >= 100
+                                    ? "#EF4444"
+                                    : dynamic.progressPercent > 80
+                                    ? "#F59E0B"
+                                    : dynamic.dynamicTierKey === "PRO"
+                                    ? "#F59E0B"
+                                    : dynamic.dynamicTierKey === "GROWTH"
+                                    ? "#818CF8"
+                                    : dynamic.dynamicTierKey === "BASIC"
+                                    ? "#60A5FA"
+                                    : dynamic.dynamicTierKey === "STARTER"
+                                    ? "#34D399"
+                                    : "#38BDF8",
+                                transition: "width 0.4s ease",
                               }}
                             />
+                          </div>
+
+                          <div style={{ fontSize: "11px", color: "#64748B", marginTop: "4px" }}>
+                            {dynamic.dynamicTierName} bracket
                           </div>
                         </td>
                         <td style={{ padding: "14px 16px", color: "#CBD5E1" }}>

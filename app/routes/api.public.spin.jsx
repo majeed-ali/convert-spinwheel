@@ -11,6 +11,7 @@ const corsHeaders = {
 };
 
 import { getOrInitShop, ensureDefaultCampaign } from "../services/billing.server";
+import { PLAN_TIERS } from "../services/plans";
 
 export const action = async ({ request }) => {
   if (request.method === "OPTIONS") {
@@ -48,10 +49,7 @@ export const action = async ({ request }) => {
     if (!shop && cleanDomain) {
       shop = await prisma.shop.findFirst({
         where: {
-          shopifyDomain: {
-            equals: cleanDomain,
-            mode: "insensitive",
-          },
+          shopifyDomain: cleanDomain,
         },
         include: {
           campaigns: {
@@ -94,6 +92,26 @@ export const action = async ({ request }) => {
     if (!campaign || !shop || !campaign.segments?.length) {
       return Response.json(
         { success: false, error: "Campaign is currently unavailable. Please check back soon." },
+        { status: 200, headers: corsHeaders }
+      );
+    }
+
+    // Check if shop has reached impression limit
+    let planKey = (shop.currentPlan || "FREE").toUpperCase();
+    if (planKey === "GROW") planKey = "GROWTH";
+    if (planKey === "ADVANCED") planKey = "PRO";
+
+    const currentPlanTier = PLAN_TIERS[planKey] || PLAN_TIERS.FREE;
+    const currentImpressions = shop.monthlyImpressionsCount || 0;
+    const planLimit = currentPlanTier.monthlyImpressions || 1000;
+
+    if (currentImpressions >= planLimit) {
+      return Response.json(
+        {
+          success: false,
+          error: "Monthly campaign limit reached. Please contact store administrator.",
+          isLimitReached: true,
+        },
         { status: 200, headers: corsHeaders }
       );
     }

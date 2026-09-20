@@ -104,6 +104,60 @@ export async function getOrInitShop(shopifyDomain, accessToken = null) {
 }
 
 /**
+ * Synchronize the shop's active recurring subscription from Shopify GraphQL to DB
+ */
+export async function syncShopSubscription(admin, shop) {
+  if (!admin || !shop) return shop;
+
+  try {
+    const activeSubQuery = `#graphql
+      query getActiveSubscriptions {
+        currentAppInstallation {
+          activeSubscriptions {
+            id
+            name
+            status
+          }
+        }
+      }
+    `;
+    const subRes = await admin.graphql(activeSubQuery);
+    const subJson = await subRes.json();
+    const subs = subJson?.data?.currentAppInstallation?.activeSubscriptions || [];
+
+    let activePlanKey = "FREE";
+    if (subs.length > 0 && subs[0].status === "ACTIVE") {
+      const subName = (subs[0].name || "").toUpperCase();
+      if (subName.includes("PRO") || subName.includes("ADVANCED")) {
+        activePlanKey = "PRO";
+      } else if (subName.includes("GROWTH") || subName.includes("GROW")) {
+        activePlanKey = "GROWTH";
+      } else if (subName.includes("BASIC")) {
+        activePlanKey = "BASIC";
+      } else if (subName.includes("STARTER")) {
+        activePlanKey = "STARTER";
+      }
+
+      if (shop.currentPlan !== activePlanKey) {
+        shop = await prisma.shop.update({
+          where: { id: shop.id },
+          data: { currentPlan: activePlanKey },
+        });
+      }
+    } else if (shop.currentPlan !== "FREE") {
+      shop = await prisma.shop.update({
+        where: { id: shop.id },
+        data: { currentPlan: "FREE", usageSubscriptionLineItemId: null },
+      });
+    }
+  } catch (e) {
+    console.error("[CS Billing] syncShopSubscription error:", e);
+  }
+
+  return shop;
+}
+
+/**
  * Increment impression count and handle overage billing for Advanced plan
  */
 export async function recordShopImpression(admin, shopifyDomain, campaignId, sessionHash) {

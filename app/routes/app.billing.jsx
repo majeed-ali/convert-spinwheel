@@ -1,61 +1,21 @@
 import { useEffect } from "react";
 import { useLoaderData, useFetcher } from "react-router";
-import { Page, Card, Grid, Text, Button, Badge, BlockStack, InlineStack, Banner, ProgressBar } from "@shopify/polaris";
+import { Page, Card, Grid, Text, Button, Badge, BlockStack, InlineStack, Banner, ProgressBar, Box } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getOrInitShop } from "../services/billing.server";
-import { PLAN_TIERS } from "../services/plans";
+import { getOrInitShop, syncShopSubscription } from "../services/billing.server";
+import { PLAN_TIERS, getDynamicTierInfo } from "../services/plans";
 
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
-  const shop = await getOrInitShop(session.shop, session.accessToken);
+  let shop = await getOrInitShop(session.shop, session.accessToken);
+  shop = await syncShopSubscription(admin, shop);
 
-  let activePlanKey = "FREE";
-  try {
-    const activeSubQuery = `#graphql
-      query getActiveSubscriptions {
-        currentAppInstallation {
-          activeSubscriptions {
-            id
-            name
-            status
-          }
-        }
-      }
-    `;
-    const subRes = await admin.graphql(activeSubQuery);
-    const subJson = await subRes.json();
-    const subs = subJson?.data?.currentAppInstallation?.activeSubscriptions || [];
+  const impressions = shop.monthlyImpressionsCount || 0;
+  const currentPlanKey = shop.currentPlan || "FREE";
+  const dynamicTierInfo = getDynamicTierInfo(impressions, currentPlanKey);
 
-    if (subs.length > 0 && subs[0].status === "ACTIVE") {
-      const subName = (subs[0].name || "").toUpperCase();
-      if (subName.includes("ADVANCED")) {
-        activePlanKey = "ADVANCED";
-      } else if (subName.includes("GROW")) {
-        activePlanKey = "GROW";
-      } else if (subName.includes("BASIC")) {
-        activePlanKey = "BASIC";
-      }
-
-      if (shop.currentPlan !== activePlanKey) {
-        await prisma.shop.update({
-          where: { id: shop.id },
-          data: { currentPlan: activePlanKey },
-        });
-        shop.currentPlan = activePlanKey;
-      }
-    } else if (shop.currentPlan !== "FREE") {
-      await prisma.shop.update({
-        where: { id: shop.id },
-        data: { currentPlan: "FREE", usageSubscriptionLineItemId: null },
-      });
-      shop.currentPlan = "FREE";
-    }
-  } catch (e) {
-    console.error("[CS Billing] Loader check error:", e);
-  }
-
-  return JSON.parse(JSON.stringify({ shop, currentPlanKey: activePlanKey || shop.currentPlan || "FREE" }));
+  return JSON.parse(JSON.stringify({ shop, currentPlanKey, dynamicTierInfo }));
 };
 
 export const action = async ({ request }) => {
@@ -153,25 +113,27 @@ export const action = async ({ request }) => {
   `;
 
   try {
+    const isTestBilling = process.env.NODE_ENV !== "production";
     const response = await admin.graphql(mutation, {
       variables: {
-        name: `Convert Spin: ${selectedTier.name}`,
+        name: `Convert Spin ${selectedTier.name}`,
         returnUrl,
         lineItems,
-        test: false,
+        test: isTestBilling,
       },
     });
 
-    const resJson = await response.json();
-    const data = resJson.data?.appSubscriptionCreate;
+    const json = await response.json();
+    const confirmationUrl = json.data?.appSubscriptionCreate?.confirmationUrl;
+    const userErrors = json.data?.appSubscriptionCreate?.userErrors;
 
-    if (data?.confirmationUrl) {
-      return Response.json({ success: true, confirmationUrl: data.confirmationUrl });
+    if (userErrors && userErrors.length > 0) {
+      console.error("[CS Billing] User Errors:", userErrors);
+      return Response.json({ error: userErrors.map((e) => e.message).join(", ") }, { status: 400 });
     }
 
-    if (data?.userErrors?.length > 0) {
-      console.error("Subscription user errors:", data.userErrors);
-      return Response.json({ error: data.userErrors[0].message || "Failed to create subscription" }, { status: 400 });
+    if (confirmationUrl) {
+      return Response.json({ confirmationUrl });
     }
   } catch (e) {
     console.error("[CS Billing] GraphQL Exception:", e);
@@ -182,7 +144,7 @@ export const action = async ({ request }) => {
 };
 
 export default function BillingPage() {
-  const { shop, currentPlanKey } = useLoaderData();
+  const { shop, currentPlanKey, dynamicTierInfo } = useLoaderData();
   const fetcher = useFetcher();
 
   const handleSelectPlan = (planKey) => {
@@ -212,7 +174,7 @@ export default function BillingPage() {
   const isSubmitting = fetcher.state !== "idle";
 
   return (
-    <Page title="Plans & Impression Tier Billing" subtitle="Simple, transparent impression-based plans with soft caps and optional overage billing.">
+    <Page title="Plans & Impression Tier Billing" subtitle="Simple, transparent impression-based plans with feature unlocks and predictable pricing.">
       <BlockStack gap="500">
         {fetcher.data?.error && (
           <Banner status="critical" title="Billing Error">
@@ -220,74 +182,130 @@ export default function BillingPage() {
           </Banner>
         )}
 
+        {dynamicTierInfo?.isSubscribedCapExceeded && (
+          <Banner
+            title={`Your Impressions Have Reached the ${dynamicTierInfo.dynamicTierName} Bracket`}
+            status="info"
+          >
+            <p>
+              Your store has logged <strong>{(shop.monthlyImpressionsCount || 0).toLocaleString()}</strong> impressions this cycle.
+              The loader automatically expanded to the <strong>{dynamicTierInfo.dynamicTierName} ({dynamicTierInfo.targetLimit.toLocaleString()} capacity)</strong> tier so you have full visibility of your usage with zero billing surprises.
+            </p>
+          </Banner>
+        )}
+
         <Card padding="500">
-          <BlockStack gap="300">
-            <InlineStack align="space-between">
-              <Text variant="headingMd">Current Active Plan: {currentTierInfo.name}</Text>
-              <Badge tone="success">Active</Badge>
+          <BlockStack gap="400">
+            <InlineStack align="space-between" blockAlign="center">
+              <BlockStack gap="100">
+                <Text variant="headingMd">
+                  Current Subscribed Plan: {currentTierInfo.name}
+                </Text>
+                <Text variant="bodySm" tone="subdued">
+                  Active Usage Bracket: <strong>{dynamicTierInfo?.dynamicTierName} ({dynamicTierInfo?.targetLimit.toLocaleString()} Max)</strong>
+                </Text>
+              </BlockStack>
+              <Badge tone={dynamicTierInfo?.isSubscribedCapExceeded ? "attention" : "success"}>
+                {dynamicTierInfo?.isSubscribedCapExceeded ? `Auto-Scaled: ${dynamicTierInfo.dynamicBadge}` : "Active Plan"}
+              </Badge>
             </InlineStack>
 
             <Text variant="bodyMd">
-              Impressions tracked this cycle: <strong>{shop.monthlyImpressionsCount.toLocaleString()}</strong> /{" "}
-              {currentTierInfo.isOverageAllowed ? "Unlimited (50,000 included)" : `${currentTierInfo.monthlyImpressions.toLocaleString()} max`}
+              Impressions tracked this cycle: <strong>{(shop.monthlyImpressionsCount || 0).toLocaleString()}</strong> /{" "}
+              {dynamicTierInfo?.targetLimit.toLocaleString()} ({dynamicTierInfo?.progressPercent}%)
             </Text>
 
             <ProgressBar
-              progress={
-                currentTierInfo.isOverageAllowed
-                  ? Math.min(100, (shop.monthlyImpressionsCount / 50000) * 100)
-                  : Math.min(100, Math.round((shop.monthlyImpressionsCount / currentTierInfo.monthlyImpressions) * 100))
+              progress={dynamicTierInfo?.progressPercent || 0}
+              tone={
+                (dynamicTierInfo?.progressPercent || 0) >= 100
+                  ? "critical"
+                  : (dynamicTierInfo?.progressPercent || 0) > 80
+                  ? "warning"
+                  : "primary"
               }
             />
+
+            {/* Visual Milestones */}
+            <Box padding="300" background="bg-surface-secondary" borderRadius="200">
+              <BlockStack gap="200">
+                <Text variant="bodySm" fontWeight="semibold" tone="subdued">
+                  Transparent Progression Tracker:
+                </Text>
+                <InlineStack gap="200" wrap>
+                  {(dynamicTierInfo?.tierChain || []).map((step) => {
+                    const isPassed = step.isCompleted;
+                    const isCurrent = step.isActive;
+                    return (
+                      <Badge
+                        key={step.key}
+                        tone={isCurrent ? "info" : isPassed ? "success" : "subdued"}
+                      >
+                        {isPassed ? "✓ " : ""}{step.label} ({step.limit.toLocaleString()}) • {step.price}{isCurrent ? " 🎯 Active" : ""}
+                      </Badge>
+                    );
+                  })}
+                </InlineStack>
+              </BlockStack>
+            </Box>
           </BlockStack>
         </Card>
 
+        {/* 5-Tier Pricing Cards */}
         <Grid>
           {Object.keys(PLAN_TIERS).map((planKey) => {
             const plan = PLAN_TIERS[planKey];
             const isCurrent = currentPlanKey === planKey;
+            const isRecommended = dynamicTierInfo?.dynamicTierKey === planKey && !isCurrent;
             const isThisPlanSubmitting = isSubmitting && fetcher.formData?.get("planKey") === planKey;
 
             return (
-              <Grid.Cell key={planKey} columnSpan={{ xs: 6, sm: 6, md: 3, lg: 3, xl: 3 }}>
+              <Grid.Cell key={planKey} columnSpan={{ xs: 6, sm: 6, md: 4, lg: 4, xl: 4 }}>
                 <Card padding="500">
                   <BlockStack gap="400" align="space-between">
-                    <BlockStack gap="200">
-                      <InlineStack align="space-between">
+                    <BlockStack gap="300">
+                      <InlineStack align="space-between" blockAlign="center">
                         <Text variant="headingLg">{plan.name}</Text>
-                        {isCurrent && <Badge tone="info">Active</Badge>}
+                        {isCurrent && <Badge tone="info">Subscribed</Badge>}
+                        {isRecommended && <Badge tone="attention">Recommended</Badge>}
                       </InlineStack>
 
-                      <Text variant="heading2xl" as="p">
-                        ${plan.price.toFixed(2)}
-                        <Text variant="bodySm" tone="subdued">
-                          /month
+                      <div>
+                        <Text variant="heading2xl" as="span">
+                          ${plan.price.toFixed(2)}
                         </Text>
+                        <Text variant="bodySm" tone="subdued" as="span">
+                          {" "}/ month
+                        </Text>
+                      </div>
+
+                      <Text variant="bodySm" tone="subdued">
+                        {plan.description}
                       </Text>
 
-                      <Text variant="bodyMd">
-                        Includes <strong>{plan.monthlyImpressions.toLocaleString()}</strong> impressions / mo
-                      </Text>
+                      <div style={{ height: "1px", backgroundColor: "#E5E7EB", margin: "4px 0" }} />
 
-                      {plan.isOverageAllowed ? (
-                        <Banner status="info" title="Overage Billing Terms">
-                          +$1.00 for every additional 1,000 impressions over 50,000.
-                        </Banner>
-                      ) : (
-                        <Text variant="bodySm" tone="subdued">
-                          Soft-cap limit. Prompt in-app to upgrade once exceeded.
-                        </Text>
-                      )}
+                      <BlockStack gap="150">
+                        {(plan.features || []).map((feature, idx) => (
+                          <InlineStack key={idx} gap="200" blockAlign="start">
+                            <span style={{ color: "#10B981", fontSize: "14px", lineHeight: "18px" }}>✓</span>
+                            <Text variant="bodySm" as="span">{feature}</Text>
+                          </InlineStack>
+                        ))}
+                      </BlockStack>
                     </BlockStack>
 
-                    <Button
-                      variant={isCurrent ? "secondary" : "primary"}
-                      disabled={isCurrent || isSubmitting}
-                      loading={isThisPlanSubmitting}
-                      onClick={() => handleSelectPlan(planKey)}
-                    >
-                      {isCurrent ? "Current Plan" : `Upgrade to ${plan.name}`}
-                    </Button>
+                    <div style={{ marginTop: "12px" }}>
+                      <Button
+                        variant={isCurrent ? "secondary" : isRecommended ? "primary" : "primary"}
+                        disabled={isCurrent || isSubmitting}
+                        loading={isThisPlanSubmitting}
+                        fullWidth
+                        onClick={() => handleSelectPlan(planKey)}
+                      >
+                        {isCurrent ? "Current Plan" : plan.price === 0 ? "Downgrade to Free" : `Select ${plan.name}`}
+                      </Button>
+                    </div>
                   </BlockStack>
                 </Card>
               </Grid.Cell>

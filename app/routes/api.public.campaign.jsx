@@ -13,6 +13,7 @@ function parseJsonField(value, fallback) {
 }
 
 import { getOrInitShop, ensureDefaultCampaign } from "../services/billing.server";
+import { PLAN_TIERS } from "../services/plans";
 
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
@@ -31,34 +32,32 @@ export const loader = async ({ request }) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  let shop = null;
-  if (cleanDomain) {
-    shop = await prisma.shop.findFirst({
-      where: {
-        shopifyDomain: {
-          equals: cleanDomain,
-          mode: "insensitive",
+  try {
+    let shop = null;
+    if (cleanDomain) {
+      shop = await prisma.shop.findFirst({
+        where: {
+          shopifyDomain: cleanDomain,
         },
-      },
-      include: {
-        campaigns: {
-          where: { status: "ACTIVE" },
-          include: {
-            segments: { orderBy: { position: "asc" } },
+        include: {
+          campaigns: {
+            where: { status: "ACTIVE" },
+            include: {
+              segments: { orderBy: { position: "asc" } },
+            },
           },
         },
-      },
-    });
+      });
 
-    if (!shop) {
-      shop = await getOrInitShop(cleanDomain);
-      const defaultCamp = await ensureDefaultCampaign(shop.id);
-      shop.campaigns = [defaultCamp];
-    } else if (!shop.campaigns || shop.campaigns.length === 0) {
-      const defaultCamp = await ensureDefaultCampaign(shop.id);
-      shop.campaigns = [defaultCamp];
+      if (!shop) {
+        shop = await getOrInitShop(cleanDomain);
+        const defaultCamp = await ensureDefaultCampaign(shop.id);
+        shop.campaigns = [defaultCamp];
+      } else if (!shop.campaigns || shop.campaigns.length === 0) {
+        const defaultCamp = await ensureDefaultCampaign(shop.id);
+        shop.campaigns = [defaultCamp];
+      }
     }
-  }
 
   if (!shop || !shop.campaigns || shop.campaigns.length === 0) {
     const anyCampaign = await prisma.campaign.findFirst({
@@ -75,6 +74,29 @@ export const loader = async ({ request }) => {
     } else {
       return Response.json({ campaign: null }, { headers: corsHeaders });
     }
+  }
+
+  // Check if shop has exceeded its monthly plan impression limit
+  let planKey = (shop.currentPlan || "FREE").toUpperCase();
+  if (planKey === "GROW") planKey = "GROWTH";
+  if (planKey === "ADVANCED") planKey = "PRO";
+
+  const currentPlanTier = PLAN_TIERS[planKey] || PLAN_TIERS.FREE;
+  const currentImpressions = shop.monthlyImpressionsCount || 0;
+  const planLimit = currentPlanTier.monthlyImpressions || 1000;
+
+  if (currentImpressions >= planLimit) {
+    return Response.json(
+      {
+        campaign: null,
+        isPaused: true,
+        reason: "MONTHLY_IMPRESSION_LIMIT_EXCEEDED",
+        currentPlan: planKey,
+        currentImpressions,
+        planLimit,
+      },
+      { headers: corsHeaders }
+    );
   }
 
   const activeCampaigns = shop.campaigns;
@@ -94,24 +116,28 @@ export const loader = async ({ request }) => {
 
   const canonicalDomain = shop.shopifyDomain || cleanDomain;
 
-  const responsePayload = {
-    campaign: {
-      id: selectedCampaign.id,
+    const responsePayload = {
+      campaign: {
+        id: selectedCampaign.id,
+        shopDomain: canonicalDomain,
+        name: selectedCampaign.name,
+        type: selectedCampaign.type,
+        triggers: parseJsonField(selectedCampaign.triggers, {}),
+        themeSettings: parseJsonField(selectedCampaign.themeSettings, {}),
+        segments: segments.map((s) => ({
+          id: s.id,
+          label: s.label,
+          hexColor: s.hexColor,
+          discountType: s.discountType,
+        })),
+      },
       shopDomain: canonicalDomain,
-      name: selectedCampaign.name,
-      type: selectedCampaign.type,
-      triggers: parseJsonField(selectedCampaign.triggers, {}),
-      themeSettings: parseJsonField(selectedCampaign.themeSettings, {}),
-      segments: segments.map((s) => ({
-        id: s.id,
-        label: s.label,
-        hexColor: s.hexColor,
-        discountType: s.discountType,
-      })),
-    },
-    shopDomain: canonicalDomain,
-    currentPlan: shop.currentPlan || "FREE",
-  };
+      currentPlan: shop.currentPlan || "FREE",
+    };
 
-  return Response.json(responsePayload, { headers: corsHeaders });
+    return Response.json(responsePayload, { headers: corsHeaders });
+  } catch (error) {
+    console.error("[CS Campaign Public] Error fetching campaign:", error);
+    return Response.json({ campaign: null, error: "Internal error" }, { status: 200, headers: corsHeaders });
+  }
 };

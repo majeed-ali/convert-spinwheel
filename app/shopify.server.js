@@ -8,9 +8,10 @@ import {
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
 
+export const PLAN_STARTER = "STARTER";
 export const PLAN_BASIC = "BASIC";
-export const PLAN_GROW = "GROW";
-export const PLAN_ADVANCED = "ADVANCED";
+export const PLAN_GROWTH = "GROWTH";
+export const PLAN_PRO = "PRO";
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -25,7 +26,25 @@ const shopify = shopifyApp({
     expiringOfflineAccessTokens: true,
   },
   billing: {
+    [PLAN_STARTER]: {
+      lineItems: [
+        {
+          amount: 2.99,
+          currencyCode: "USD",
+          interval: BillingInterval.Every30Days,
+        },
+      ],
+    },
     [PLAN_BASIC]: {
+      lineItems: [
+        {
+          amount: 5.99,
+          currencyCode: "USD",
+          interval: BillingInterval.Every30Days,
+        },
+      ],
+    },
+    [PLAN_GROWTH]: {
       lineItems: [
         {
           amount: 9.99,
@@ -34,27 +53,12 @@ const shopify = shopifyApp({
         },
       ],
     },
-    [PLAN_GROW]: {
+    [PLAN_PRO]: {
       lineItems: [
         {
           amount: 19.99,
           currencyCode: "USD",
           interval: BillingInterval.Every30Days,
-        },
-      ],
-    },
-    [PLAN_ADVANCED]: {
-      lineItems: [
-        {
-          amount: 39.99,
-          currencyCode: "USD",
-          interval: BillingInterval.Every30Days,
-        },
-        {
-          amount: 500.0,
-          currencyCode: "USD",
-          interval: BillingInterval.Usage,
-          terms: "$1.00 per 1,000 impressions over 50,000",
         },
       ],
     },
