@@ -1,5 +1,7 @@
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { PLAN_TIERS } from "../services/plans";
+import { sendSubscriptionUpgradedEmail } from "../services/email.server";
 
 export const action = async ({ request }) => {
   const { shop, payload, topic } = await authenticate.webhook(request);
@@ -8,7 +10,6 @@ export const action = async ({ request }) => {
 
   if (payload && payload.app_subscription) {
     const status = payload.app_subscription.status;
-    const lineItems = payload.app_subscription.line_items || [];
 
     let currentPlan = "FREE";
     let usageLineItemId = null;
@@ -26,6 +27,12 @@ export const action = async ({ request }) => {
       }
     }
 
+    const existingShop = await prisma.shop.findUnique({
+      where: { shopifyDomain: shop },
+    });
+
+    const isNewlyUpgraded = existingShop && existingShop.currentPlan !== currentPlan && currentPlan !== "FREE";
+
     await prisma.shop.updateMany({
       where: { shopifyDomain: shop },
       data: {
@@ -33,6 +40,17 @@ export const action = async ({ request }) => {
         usageSubscriptionLineItemId: usageLineItemId,
       },
     });
+
+    if (isNewlyUpgraded && existingShop.contactEmail) {
+      const planInfo = PLAN_TIERS[currentPlan] || PLAN_TIERS.STARTER;
+      sendSubscriptionUpgradedEmail({
+        to: existingShop.contactEmail,
+        shopDomain: shop,
+        planName: planInfo.name,
+        planPrice: planInfo.price,
+        impressionLimit: planInfo.monthlyImpressions,
+      }).catch((err) => console.error("[Webhook] Upgrade email error:", err));
+    }
   }
 
   return new Response();

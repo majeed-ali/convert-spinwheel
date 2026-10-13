@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { redirect, useLoaderData, Form } from "react-router";
 import prisma from "../db.server";
 import { PLAN_TIERS, getDynamicTierInfo } from "../services/plans";
+import { checkAndResetMonthlyCycle } from "../services/billing.server";
 
 export const loader = async ({ request }) => {
   const cookieHeader = request.headers.get("Cookie") || "";
@@ -31,6 +32,22 @@ export const loader = async ({ request }) => {
     },
     orderBy: { convertedAt: "desc" },
   });
+
+  // Fetch past monthly billing & usage history
+  let allBillingHistory = [];
+  try {
+    allBillingHistory = await prisma.billingCycleHistory.findMany({
+      include: {
+        shop: {
+          select: { shopifyDomain: true, contactEmail: true },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+  } catch (err) {
+    console.error("[Super Admin] Billing history query error:", err);
+  }
 
   const totalStores = allShops.length;
 
@@ -64,6 +81,7 @@ export const loader = async ({ request }) => {
     JSON.stringify({
       allShops,
       allLeads,
+      allBillingHistory,
       totalStores,
       freeStores,
       starterStores,
@@ -80,6 +98,20 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
+  const formData = await request.formData();
+  const actionType = formData.get("actionType");
+
+  if (actionType === "forceResetCycle") {
+    const shopId = formData.get("shopId");
+    if (shopId) {
+      const shop = await prisma.shop.findUnique({ where: { id: shopId } });
+      if (shop) {
+        await checkAndResetMonthlyCycle(shop, true);
+      }
+    }
+    return Response.json({ success: true });
+  }
+
   return redirect("/super-admin/login", {
     headers: {
       "Set-Cookie": "dev_admin_session=; Path=/; HttpOnly; Max-Age=0",
@@ -91,6 +123,7 @@ export default function SuperAdminDashboard() {
   const {
     allShops = [],
     allLeads = [],
+    allBillingHistory = [],
     totalStores = 0,
     freeStores = 0,
     starterStores = 0,
@@ -104,7 +137,7 @@ export default function SuperAdminDashboard() {
     totalLeadsCaptured = 0,
   } = useLoaderData() || {};
 
-  const [activeTab, setActiveTab] = useState("stores"); // "stores" | "leads"
+  const [activeTab, setActiveTab] = useState("stores"); // "stores" | "leads" | "history"
   const [selectedDomain, setSelectedDomain] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [pageSize, setPageSize] = useState(25);
@@ -420,6 +453,27 @@ export default function SuperAdminDashboard() {
               </span>
             )}
           </button>
+
+          <button
+            onClick={() => setActiveTab("history")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              backgroundColor: activeTab === "history" ? "#3B82F6" : "#1E293B",
+              color: "#FFFFFF",
+              border: activeTab === "history" ? "1px solid #60A5FA" : "1px solid #334155",
+              padding: "10px 20px",
+              borderRadius: "10px",
+              fontSize: "14px",
+              fontWeight: "700",
+              cursor: "pointer",
+              transition: "all 0.2s",
+              boxShadow: activeTab === "history" ? "0 4px 12px rgba(59, 130, 246, 0.3)" : "none",
+            }}
+          >
+            📜 Monthly Billing & Usage History ({allBillingHistory.length})
+          </button>
         </div>
 
         {/* TAB 1: Installed Stores Directory */}
@@ -489,7 +543,14 @@ export default function SuperAdminDashboard() {
                           <td style={{ padding: "14px 16px", fontWeight: "600", color: "#F8FAFC" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                               <span>🏪</span>
-                              <span>{shop.shopifyDomain}</span>
+                              <div>
+                                <div>{shop.shopifyDomain}</div>
+                                {shop.contactEmail && (
+                                  <div style={{ fontSize: "11px", color: "#94A3B8", fontWeight: "400", marginTop: "2px" }}>
+                                    ✉️ {shop.contactEmail}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </td>
                           <td style={{ padding: "14px 16px" }}>
@@ -613,21 +674,49 @@ export default function SuperAdminDashboard() {
                             {shop.createdAt ? new Date(shop.createdAt).toLocaleDateString() : "-"}
                           </td>
                           <td style={{ padding: "14px 16px", textAlign: "right" }}>
-                            <button
-                              onClick={() => handleViewDomainLeads(shop.shopifyDomain)}
-                              style={{
-                                backgroundColor: "#334155",
-                                color: "#F8FAFC",
-                                border: "1px solid #475569",
-                                padding: "6px 12px",
-                                borderRadius: "6px",
-                                fontSize: "12px",
-                                fontWeight: "600",
-                                cursor: "pointer",
-                              }}
-                            >
-                              Inspect Leads 📧
-                            </button>
+                            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", alignItems: "center" }}>
+                              <button
+                                onClick={() => handleViewDomainLeads(shop.shopifyDomain)}
+                                style={{
+                                  backgroundColor: "#334155",
+                                  color: "#F8FAFC",
+                                  border: "1px solid #475569",
+                                  padding: "6px 12px",
+                                  borderRadius: "6px",
+                                  fontSize: "12px",
+                                  fontWeight: "600",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                Inspect Leads 📧
+                              </button>
+                              <Form method="post" style={{ display: "inline" }}>
+                                <input type="hidden" name="actionType" value="forceResetCycle" />
+                                <input type="hidden" name="shopId" value={shop.id} />
+                                <button
+                                  type="submit"
+                                  title="Archive current cycle and reset 1,000 monthly impressions immediately"
+                                  onClick={(e) => {
+                                    if (!confirm(`Are you sure you want to reset the monthly billing cycle for ${shop.shopifyDomain}? This will archive current cycle usage and unpause the wheel.`)) {
+                                      e.preventDefault();
+                                    }
+                                  }}
+                                  style={{
+                                    backgroundColor: "rgba(16, 185, 129, 0.15)",
+                                    color: "#34D399",
+                                    border: "1px solid rgba(16, 185, 129, 0.4)",
+                                    padding: "6px 12px",
+                                    borderRadius: "6px",
+                                    fontSize: "12px",
+                                    fontWeight: "600",
+                                    cursor: "pointer",
+                                    transition: "all 0.15s",
+                                  }}
+                                >
+                                  ⚡ Reset Cycle
+                                </button>
+                              </Form>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1087,6 +1176,131 @@ export default function SuperAdminDashboard() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* TAB 3: Monthly Billing & Usage History */}
+        {activeTab === "history" && (
+          <div
+            style={{
+              backgroundColor: "#1E293B",
+              border: "1px solid #334155",
+              borderRadius: "16px",
+              padding: "24px",
+              boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.3)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+              <div>
+                <h2 style={{ fontSize: "18px", fontWeight: "700", margin: "0 0 4px 0", color: "#FFFFFF" }}>
+                  Archived Monthly Billing Cycles ({allBillingHistory.length})
+                </h2>
+                <span style={{ fontSize: "12px", color: "#94A3B8" }}>
+                  History of past 30-day billing cycles, impression consumption, and leads gathered per merchant store
+                </span>
+              </div>
+            </div>
+
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid #334155", color: "#94A3B8", fontSize: "12px", textTransform: "uppercase" }}>
+                    <th style={{ padding: "12px 16px" }}>Shop Domain</th>
+                    <th style={{ padding: "12px 16px" }}>Billing Cycle Period</th>
+                    <th style={{ padding: "12px 16px" }}>Plan Tier</th>
+                    <th style={{ padding: "12px 16px" }}>Impressions Logged</th>
+                    <th style={{ padding: "12px 16px" }}>Leads Captured</th>
+                    <th style={{ padding: "12px 16px" }}>Cycle Status</th>
+                    <th style={{ padding: "12px 16px", textAlign: "right" }}>Archived At</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allBillingHistory.length === 0 ? (
+                    <tr>
+                      <td colSpan="7" style={{ padding: "36px", textAlign: "center", color: "#64748B" }}>
+                        No billing cycles archived yet. When a store reaches 30 days or is reset via "⚡ Reset Cycle", past history snapshots appear here.
+                      </td>
+                    </tr>
+                  ) : (
+                    allBillingHistory.map((item) => {
+                      const tier = PLAN_TIERS[item.planKey] || PLAN_TIERS.FREE;
+                      const planColor = tier.badgeColor || "#38BDF8";
+                      const planBg = tier.badgeBg || "rgba(56, 189, 248, 0.15)";
+                      const startDate = item.cycleStartDate ? new Date(item.cycleStartDate).toLocaleDateString() : "-";
+                      const endDate = item.cycleEndDate ? new Date(item.cycleEndDate).toLocaleDateString() : "-";
+                      const archivedDate = item.createdAt ? new Date(item.createdAt).toLocaleDateString() : "-";
+                      const isCapHit = item.status === "CAP_EXCEEDED";
+
+                      return (
+                        <tr
+                          key={item.id}
+                          style={{
+                            borderBottom: "1px solid #334155",
+                            fontSize: "14px",
+                          }}
+                        >
+                          <td style={{ padding: "14px 16px", fontWeight: "600", color: "#F8FAFC" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                              <span>🏪</span>
+                              <div>
+                                <div>{item.shop?.shopifyDomain || "Unknown"}</div>
+                                {item.shop?.contactEmail && (
+                                  <div style={{ fontSize: "11px", color: "#94A3B8", fontWeight: "400" }}>
+                                    ✉️ {item.shop.contactEmail}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td style={{ padding: "14px 16px", color: "#CBD5E1", fontSize: "13px" }}>
+                            📅 {startDate} → {endDate}
+                          </td>
+                          <td style={{ padding: "14px 16px" }}>
+                            <span
+                              style={{
+                                backgroundColor: planBg,
+                                color: planColor,
+                                border: `1px solid ${planColor}`,
+                                padding: "3px 8px",
+                                borderRadius: "6px",
+                                fontSize: "11px",
+                                fontWeight: "700",
+                              }}
+                            >
+                              {tier.name}
+                            </span>
+                          </td>
+                          <td style={{ padding: "14px 16px", color: "#F8FAFC", fontWeight: "700" }}>
+                            {Number(item.impressionsCount).toLocaleString()} / {tier.monthlyImpressions.toLocaleString()}
+                          </td>
+                          <td style={{ padding: "14px 16px", color: "#10B981", fontWeight: "700" }}>
+                            {Number(item.leadsCount).toLocaleString()} leads
+                          </td>
+                          <td style={{ padding: "14px 16px" }}>
+                            <span
+                              style={{
+                                backgroundColor: isCapHit ? "rgba(239, 68, 68, 0.15)" : "rgba(16, 185, 129, 0.15)",
+                                color: isCapHit ? "#F87171" : "#34D399",
+                                border: `1px solid ${isCapHit ? "rgba(239, 68, 68, 0.4)" : "rgba(16, 185, 129, 0.4)"}`,
+                                padding: "3px 8px",
+                                borderRadius: "6px",
+                                fontSize: "11px",
+                                fontWeight: "700",
+                              }}
+                            >
+                              {isCapHit ? "⏸️ CAP EXCEEDED" : "🟢 COMPLETED"}
+                            </span>
+                          </td>
+                          <td style={{ padding: "14px 16px", textAlign: "right", color: "#64748B", fontSize: "12px" }}>
+                            {archivedDate}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>

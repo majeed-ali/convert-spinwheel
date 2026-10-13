@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLoaderData, useNavigate, useFetcher } from "react-router";
+import { useLoaderData, useNavigate, useFetcher, redirect } from "react-router";
 import {
   Page,
   Layout,
@@ -18,7 +18,7 @@ import {
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getOrInitShop, syncShopSubscription } from "../services/billing.server";
+import { getOrInitShop, syncShopSubscription, syncShopContactEmail, checkAndResetMonthlyCycle } from "../services/billing.server";
 import { PLAN_TIERS, getDynamicTierInfo } from "../services/plans";
 
 const NEXT_TIER_MAP = {
@@ -32,7 +32,49 @@ const NEXT_TIER_MAP = {
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
   let shop = await getOrInitShop(session.shop, session.accessToken);
+  shop = await syncShopContactEmail(admin, shop);
   shop = await syncShopSubscription(admin, shop);
+  shop = await checkAndResetMonthlyCycle(shop);
+
+  // Handle direct 1-click upgrade from automated email links
+  const url = new URL(request.url);
+  const directUpgradeKey = url.searchParams.get("upgrade")?.toUpperCase();
+  if (directUpgradeKey && PLAN_TIERS[directUpgradeKey] && PLAN_TIERS[directUpgradeKey].price > 0) {
+    const selectedTier = PLAN_TIERS[directUpgradeKey];
+    const returnUrl = `https://${session.shop}/admin/apps/${process.env.SHOPIFY_API_KEY}/app`;
+    const res = await admin.graphql(
+      `#graphql
+      mutation appSubscriptionCreate($name: String!, $returnUrl: URL!, $lineItems: [AppSubscriptionLineItemInput!]!, $test: Boolean) {
+        appSubscriptionCreate(name: $name, returnUrl: $returnUrl, lineItems: $lineItems, test: $test) {
+          appSubscription { id }
+          confirmationUrl
+          userErrors { field message }
+        }
+      }`,
+      {
+        variables: {
+          name: `${selectedTier.name} (Recurring 30 Days)`,
+          returnUrl,
+          lineItems: [
+            {
+              plan: {
+                appRecurringPricingDetails: {
+                  price: { amount: selectedTier.price, currencyCode: "USD" },
+                  interval: "EVERY_30_DAYS",
+                },
+              },
+            },
+          ],
+          test: process.env.NODE_ENV !== "production",
+        },
+      }
+    );
+    const json = await res.json();
+    const confirmationUrl = json.data?.appSubscriptionCreate?.confirmationUrl;
+    if (confirmationUrl) {
+      return redirect(confirmationUrl);
+    }
+  }
 
   // Fetch campaign statistics
   const activeCampaigns = await prisma.campaign.findMany({

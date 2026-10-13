@@ -42,14 +42,34 @@ model Shop {
   klaviyoApiKey               String?
   mailchimpApiKey             String?
   sendgridApiKey              String?
+  contactEmail                String?
+  lastWarningEmailSent        String?         @default("NONE") // NONE, WARN_80, PAUSED_100
   createdAt                   DateTime        @default(now())
   updatedAt                   DateTime        @updatedAt
 
   campaigns                   Campaign[]
   leads                       Lead[]
   impressionLogs              ImpressionLog[]
+  billingHistory              BillingCycleHistory[]
 
   @@index([shopifyDomain])
+}
+
+model BillingCycleHistory {
+  id               String   @id @default(uuid())
+  shopId           String
+  cycleStartDate   DateTime
+  cycleEndDate     DateTime
+  planKey          String
+  impressionsCount Int
+  leadsCount       Int      @default(0)
+  status           String   @default("COMPLETED") // COMPLETED, CAP_EXCEEDED
+  createdAt        DateTime @default(now())
+
+  shop             Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, cycleStartDate])
+  @@index([createdAt])
 }
 
 model Campaign {

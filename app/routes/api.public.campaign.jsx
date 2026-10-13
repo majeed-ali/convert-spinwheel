@@ -12,7 +12,7 @@ function parseJsonField(value, fallback) {
   }
 }
 
-import { getOrInitShop, ensureDefaultCampaign } from "../services/billing.server";
+import { getOrInitShop, ensureDefaultCampaign, checkAndResetMonthlyCycle } from "../services/billing.server";
 import { PLAN_TIERS } from "../services/plans";
 
 export const loader = async ({ request }) => {
@@ -57,6 +57,9 @@ export const loader = async ({ request }) => {
         const defaultCamp = await ensureDefaultCampaign(shop.id);
         shop.campaigns = [defaultCamp];
       }
+
+      // Check and auto-reset monthly billing cycle if 30 days have passed
+      shop = await checkAndResetMonthlyCycle(shop);
     }
 
   if (!shop || !shop.campaigns || shop.campaigns.length === 0) {
