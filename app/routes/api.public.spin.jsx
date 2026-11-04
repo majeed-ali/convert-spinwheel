@@ -11,7 +11,7 @@ const corsHeaders = {
 };
 
 import { getOrInitShop, ensureDefaultCampaign } from "../services/billing.server";
-import { PLAN_TIERS } from "../services/plans";
+import { getImpressionLimit } from "../services/plans";
 
 export const action = async ({ request }) => {
   if (request.method === "OPTIONS") {
@@ -97,13 +97,8 @@ export const action = async ({ request }) => {
     }
 
     // Check if shop has reached impression limit
-    let planKey = (shop.currentPlan || "FREE").toUpperCase();
-    if (planKey === "GROW") planKey = "GROWTH";
-    if (planKey === "ADVANCED") planKey = "PRO";
-
-    const currentPlanTier = PLAN_TIERS[planKey] || PLAN_TIERS.FREE;
     const currentImpressions = shop.monthlyImpressionsCount || 0;
-    const planLimit = currentPlanTier.monthlyImpressions || 1000;
+    const planLimit = getImpressionLimit(shop);
 
     if (currentImpressions >= planLimit) {
       return Response.json(

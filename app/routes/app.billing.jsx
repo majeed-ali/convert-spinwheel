@@ -3,8 +3,8 @@ import { useLoaderData, useFetcher } from "react-router";
 import { Page, Card, Grid, Text, Button, Badge, BlockStack, InlineStack, Banner, ProgressBar, Box } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getOrInitShop, syncShopSubscription } from "../services/billing.server";
-import { PLAN_TIERS, getDynamicTierInfo } from "../services/plans";
+import { getOrInitShop, syncShopSubscription, createAutoScaleSubscription } from "../services/billing.server";
+import { PLAN_TIERS, AUTO_SCALE_PLAN, getDynamicTierInfo, normalizePlanKey, getEffectiveTier } from "../services/plans";
 
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
@@ -12,10 +12,14 @@ export const loader = async ({ request }) => {
   shop = await syncShopSubscription(admin, shop);
 
   const impressions = shop.monthlyImpressionsCount || 0;
-  const currentPlanKey = shop.currentPlan || "FREE";
+  const currentPlanKey = normalizePlanKey(shop.currentPlan);
   const dynamicTierInfo = getDynamicTierInfo(impressions, currentPlanKey);
+  const autoScaleInfo = {
+    tierName: getEffectiveTier(shop).name,
+    billedThisCycle: ((shop.cycleBilledCents || 0) / 100).toFixed(2),
+  };
 
-  return JSON.parse(JSON.stringify({ shop, currentPlanKey, dynamicTierInfo }));
+  return JSON.parse(JSON.stringify({ shop, currentPlanKey, dynamicTierInfo, autoScaleInfo }));
 };
 
 export const action = async ({ request }) => {
@@ -24,6 +28,11 @@ export const action = async ({ request }) => {
   const planKey = formData.get("planKey");
 
   const shop = await getOrInitShop(session.shop, session.accessToken);
+
+  if (planKey === "AUTO") {
+    const result = await createAutoScaleSubscription(admin, session.shop, "/app/billing");
+    return Response.json(result, { status: result.error ? 400 : 200 });
+  }
 
   if (planKey === "FREE") {
     try {
@@ -144,7 +153,7 @@ export const action = async ({ request }) => {
 };
 
 export default function BillingPage() {
-  const { shop, currentPlanKey, dynamicTierInfo } = useLoaderData();
+  const { shop, currentPlanKey, dynamicTierInfo, autoScaleInfo } = useLoaderData();
   const fetcher = useFetcher();
 
   const handleSelectPlan = (planKey) => {
@@ -170,7 +179,8 @@ export default function BillingPage() {
     }
   }, [fetcher.data]);
 
-  const currentTierInfo = PLAN_TIERS[currentPlanKey] || PLAN_TIERS.FREE;
+  const isAutoScale = currentPlanKey === "AUTO";
+  const currentTierInfo = isAutoScale ? AUTO_SCALE_PLAN : PLAN_TIERS[currentPlanKey] || PLAN_TIERS.FREE;
   const isSubmitting = fetcher.state !== "idle";
 
   return (
@@ -250,6 +260,41 @@ export default function BillingPage() {
             </Box>
           </BlockStack>
         </Card>
+
+        {/* Auto-Scale (pay-as-you-grow) — recommended */}
+        <Card padding="500">
+          <BlockStack gap="300">
+            <InlineStack align="space-between" blockAlign="center">
+              <InlineStack gap="200" blockAlign="center">
+                <Text variant="headingLg">{AUTO_SCALE_PLAN.name}</Text>
+                {isAutoScale ? <Badge tone="info">Subscribed</Badge> : <Badge tone="success">Recommended</Badge>}
+              </InlineStack>
+              <Text variant="headingMd">$0 to start · max ${AUTO_SCALE_PLAN.cappedAmount.toFixed(2)} / 30 days</Text>
+            </InlineStack>
+            <Text variant="bodyMd">
+              Your wheel never pauses for volume. You pay only for the tier your traffic actually reaches each cycle, with the features of that tier included.
+            </Text>
+            <Text variant="bodySm" tone="subdued">{AUTO_SCALE_PLAN.terms}</Text>
+            {isAutoScale ? (
+              <Banner tone="success">
+                Currently on <strong>{autoScaleInfo?.tierName}</strong>. Billed this cycle: <strong>${autoScaleInfo?.billedThisCycle}</strong>.
+              </Banner>
+            ) : (
+              <div>
+                <Button
+                  variant="primary"
+                  disabled={isSubmitting}
+                  loading={isSubmitting && fetcher.formData?.get("planKey") === "AUTO"}
+                  onClick={() => handleSelectPlan("AUTO")}
+                >
+                  Turn On Auto-Scale
+                </Button>
+              </div>
+            )}
+          </BlockStack>
+        </Card>
+
+        <Text variant="headingMd">Or choose a fixed monthly plan</Text>
 
         {/* 5-Tier Pricing Cards */}
         <Grid>

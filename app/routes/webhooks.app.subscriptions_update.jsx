@@ -1,56 +1,55 @@
-import { authenticate } from "../shopify.server";
+import { authenticate, unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
-import { PLAN_TIERS } from "../services/plans";
+import { PLAN_TIERS, normalizePlanKey } from "../services/plans";
+import { syncShopSubscription } from "../services/billing.server";
 import { sendSubscriptionUpgradedEmail } from "../services/email.server";
 
 export const action = async ({ request }) => {
-  const { shop, payload, topic } = await authenticate.webhook(request);
+  const { shop, payload, topic, admin: webhookAdmin } = await authenticate.webhook(request);
 
   console.log(`Received ${topic} webhook for ${shop}`);
 
-  if (payload && payload.app_subscription) {
-    const status = payload.app_subscription.status;
+  if (!payload?.app_subscription) return new Response();
 
-    let currentPlan = "FREE";
-    let usageLineItemId = null;
+  const existingShop = await prisma.shop.findUnique({
+    where: { shopifyDomain: shop },
+  });
+  if (!existingShop) return new Response();
 
-    if (status === "ACTIVE") {
-      const name = (payload.app_subscription.name || "").toUpperCase();
-      if (name.includes("PRO") || name.includes("ADVANCED")) {
-        currentPlan = "PRO";
-      } else if (name.includes("GROWTH") || name.includes("GROW")) {
-        currentPlan = "GROWTH";
-      } else if (name.includes("BASIC")) {
-        currentPlan = "BASIC";
-      } else if (name.includes("STARTER")) {
-        currentPlan = "STARTER";
-      }
+  // Re-read active subscriptions from Shopify so we capture the usage
+  // line item ID needed for Auto-Scale billing (the payload doesn't include it).
+  let admin = webhookAdmin;
+  if (!admin) {
+    try {
+      admin = (await unauthenticated.admin(shop))?.admin;
+    } catch (e) {
+      console.error("[Webhook] Could not get admin context:", e);
     }
+  }
 
-    const existingShop = await prisma.shop.findUnique({
-      where: { shopifyDomain: shop },
+  let updatedShop = existingShop;
+  if (admin) {
+    updatedShop = await syncShopSubscription(admin, existingShop);
+  } else if (payload.app_subscription.status !== "ACTIVE") {
+    updatedShop = await prisma.shop.update({
+      where: { id: existingShop.id },
+      data: { currentPlan: "FREE", usageSubscriptionLineItemId: null },
     });
+  }
 
-    const isNewlyUpgraded = existingShop && existingShop.currentPlan !== currentPlan && currentPlan !== "FREE";
+  const previousPlan = normalizePlanKey(existingShop.currentPlan);
+  const newPlan = normalizePlanKey(updatedShop.currentPlan);
 
-    await prisma.shop.updateMany({
-      where: { shopifyDomain: shop },
-      data: {
-        currentPlan,
-        usageSubscriptionLineItemId: usageLineItemId,
-      },
-    });
-
-    if (isNewlyUpgraded && existingShop.contactEmail) {
-      const planInfo = PLAN_TIERS[currentPlan] || PLAN_TIERS.STARTER;
-      sendSubscriptionUpgradedEmail({
-        to: existingShop.contactEmail,
-        shopDomain: shop,
-        planName: planInfo.name,
-        planPrice: planInfo.price,
-        impressionLimit: planInfo.monthlyImpressions,
-      }).catch((err) => console.error("[Webhook] Upgrade email error:", err));
-    }
+  // Auto-Scale has its own per-tier notices, so only email for fixed-price upgrades.
+  if (newPlan !== previousPlan && newPlan !== "FREE" && newPlan !== "AUTO" && existingShop.contactEmail) {
+    const planInfo = PLAN_TIERS[newPlan] || PLAN_TIERS.STARTER;
+    sendSubscriptionUpgradedEmail({
+      to: existingShop.contactEmail,
+      shopDomain: shop,
+      planName: planInfo.name,
+      planPrice: planInfo.price,
+      impressionLimit: planInfo.monthlyImpressions,
+    }).catch((err) => console.error("[Webhook] Upgrade email error:", err));
   }
 
   return new Response();

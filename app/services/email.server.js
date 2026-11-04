@@ -181,7 +181,7 @@ export async function sendCapPausedEmail({
   const transport = getTransporter();
   if (!transport) return null;
 
-  const appUrl = `https://${shopDomain}/admin/apps/${process.env.SHOPIFY_API_KEY}/app?upgrade=STARTER`;
+  const appUrl = `https://${shopDomain}/admin/apps/${process.env.SHOPIFY_API_KEY}/app?upgrade=AUTO`;
 
   const contentHtml = `
     <p style="font-size: 15px; line-height: 1.6; color: #334155; margin-top: 0;">
@@ -212,11 +212,11 @@ export async function sendCapPausedEmail({
     </div>
 
     <p style="font-size: 14px; line-height: 1.6; color: #475569;">
-      Visitors to your store are currently missing the chance to spin and convert into paying customers. You can instantly unpause your wheel with 1 click:
+      Visitors to your store are currently missing the chance to spin and convert into paying customers. Turn on Auto-Scale to unpause your wheel. You only pay for the volume you actually use, starting at $${nextPlanPrice} for the ${nextPlanName}, and never more than $19.99 per 30 days:
     </p>
 
     <div class="btn-container">
-      <a href="${appUrl}" class="btn">🚀 Reactivate Wheel Instantly ($${nextPlanPrice}/mo)</a>
+      <a href="${appUrl}" class="btn">🚀 Turn On Auto-Scale &amp; Reactivate</a>
     </div>
 
     <p style="text-align: center; font-size: 12px; color: #94A3B8; margin-top: 12px;">
@@ -361,6 +361,156 @@ export async function sendSubscriptionUpgradedEmail({
     });
   } catch (error) {
     console.error("[ConvertSpin Email] sendSubscriptionUpgradedEmail error:", error);
+    return null;
+  }
+}
+
+/**
+ * 6. One-time announcement to existing Free stores introducing Auto-Scale.
+ * Returns the nodemailer result, or null if SMTP isn't configured / sending failed.
+ */
+export async function sendAutoScaleAnnouncementEmail({ to, shopDomain, impressionsThisCycle = 0 }) {
+  if (!to) return null;
+  const transport = getTransporter();
+  if (!transport) return null;
+
+  const enableUrl = `https://${shopDomain}/admin/apps/${process.env.SHOPIFY_API_KEY}/app?upgrade=AUTO`;
+
+  const contentHtml = `
+    <p style="font-size: 15px; line-height: 1.6; color: #334155; margin-top: 0;">
+      Hello Store Owner,
+    </p>
+    <p style="font-size: 15px; line-height: 1.6; color: #334155;">
+      Your free plan on <strong>${shopDomain}</strong> includes 1,000 spin wheel impressions per 30 days. Once you reach that,
+      the wheel pauses and you miss leads from new visitors until the next cycle.
+    </p>
+    <p style="font-size: 15px; line-height: 1.6; color: #334155;">
+      <strong>Auto-Scale</strong> keeps your wheel running as your traffic grows. You approve it once and pay only for the volume you actually use:
+    </p>
+
+    <div class="stat-box">
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+          <td style="padding: 6px 0; color: #64748B; font-size: 14px;">Up to 1,000 impressions</td>
+          <td style="padding: 6px 0; text-align: right; color: #10B981; font-weight: 700; font-size: 15px;">Free</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; color: #64748B; font-size: 14px;">Up to 5,000</td>
+          <td style="padding: 6px 0; text-align: right; color: #0F172A; font-weight: 700; font-size: 15px;">$2.99</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; color: #64748B; font-size: 14px;">Up to 20,000</td>
+          <td style="padding: 6px 0; text-align: right; color: #0F172A; font-weight: 700; font-size: 15px;">$5.99</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; color: #64748B; font-size: 14px;">Up to 50,000</td>
+          <td style="padding: 6px 0; text-align: right; color: #0F172A; font-weight: 700; font-size: 15px;">$9.99</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; color: #64748B; font-size: 14px;">Up to 150,000</td>
+          <td style="padding: 6px 0; text-align: right; color: #0F172A; font-weight: 700; font-size: 15px;">$19.99 maximum</td>
+        </tr>
+      </table>
+    </div>
+
+    <p style="font-size: 14px; line-height: 1.6; color: #475569;">
+      Nothing is charged when you turn it on. Usage resets every 30 days, so quieter months cost less, and the total never exceeds $19.99 per cycle.
+      ${impressionsThisCycle > 0 ? `This cycle your wheel has been shown <strong>${Number(impressionsThisCycle).toLocaleString()}</strong> times so far.` : ""}
+      Charges appear on your regular Shopify bill, and you can cancel anytime.
+    </p>
+
+    <div class="btn-container">
+      <a href="${enableUrl}" class="btn">Turn On Auto-Scale ($0 to start)</a>
+    </div>
+
+    <p style="text-align: center; font-size: 12px; color: #94A3B8; margin-top: 12px;">
+      You're receiving this one-time notice because ConvertSpin is installed on ${shopDomain}. If you don't turn it on, nothing changes. You stay on the Free plan.
+    </p>
+  `;
+
+  try {
+    return await transport.sendMail({
+      from: FROM_ADDRESS,
+      to,
+      subject: `New for ${shopDomain}: keep your spin wheel running with Auto-Scale`,
+      html: wrapEmailHtml({
+        title: "Never Let Your Spin Wheel Pause",
+        preheader: "Free up to 1,000 impressions, then pay only for what you use. Max $19.99 per 30 days.",
+        contentHtml,
+      }),
+    });
+  } catch (error) {
+    console.error("[ConvertSpin Email] sendAutoScaleAnnouncementEmail error:", error);
+    return null;
+  }
+}
+
+/**
+ * 5. Notice when an Auto-Scale store moves into a higher usage tier and is billed for it
+ */
+export async function sendAutoScaleTierEmail({
+  to,
+  shopDomain,
+  tierName,
+  tierPrice,
+  impressionLimit,
+  currentImpressions,
+}) {
+  if (!to) return null;
+  const transport = getTransporter();
+  if (!transport) return null;
+
+  const appUrl = `https://${shopDomain}/admin/apps/${process.env.SHOPIFY_API_KEY}/app/billing`;
+
+  const contentHtml = `
+    <p style="font-size: 15px; line-height: 1.6; color: #334155; margin-top: 0;">
+      Hello Store Owner,
+    </p>
+    <p style="font-size: 15px; line-height: 1.6; color: #334155;">
+      Your spin wheel on <strong>${shopDomain}</strong> is getting more traffic. Your Auto-Scale plan has moved up to
+      <strong>${tierName}</strong> for this 30-day cycle, so your wheel keeps running with no interruption.
+    </p>
+
+    <div class="stat-box">
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+          <td style="padding: 6px 0; color: #64748B; font-size: 14px;">Impressions This Cycle</td>
+          <td style="padding: 6px 0; text-align: right; color: #0F172A; font-weight: 700; font-size: 15px;">${Number(currentImpressions).toLocaleString()}</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; color: #64748B; font-size: 14px;">Current Tier</td>
+          <td style="padding: 6px 0; text-align: right; color: #4F46E5; font-weight: 700; font-size: 15px;">${tierName} (up to ${Number(impressionLimit).toLocaleString()})</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; color: #64748B; font-size: 14px;">This Cycle's Total</td>
+          <td style="padding: 6px 0; text-align: right; color: #0F172A; font-weight: 700; font-size: 15px;">$${Number(tierPrice).toFixed(2)}</td>
+        </tr>
+      </table>
+    </div>
+
+    <p style="font-size: 14px; line-height: 1.6; color: #475569;">
+      This is billed through your Shopify invoice under the Auto-Scale plan you approved, and never exceeds $19.99 per 30 days.
+      Usage resets each cycle, so quieter months cost less. You can switch plans or cancel anytime from the billing page.
+    </p>
+
+    <div class="btn-container">
+      <a href="${appUrl}" class="btn">View Usage &amp; Billing</a>
+    </div>
+  `;
+
+  try {
+    return await transport.sendMail({
+      from: FROM_ADDRESS,
+      to,
+      subject: `ConvertSpin: ${shopDomain} moved to ${tierName} this cycle`,
+      html: wrapEmailHtml({
+        title: "Your Wheel Auto-Scaled",
+        preheader: `${Number(currentImpressions).toLocaleString()} impressions this cycle. Now on ${tierName} ($${Number(tierPrice).toFixed(2)}).`,
+        contentHtml,
+      }),
+    });
+  } catch (error) {
+    console.error("[ConvertSpin Email] sendAutoScaleTierEmail error:", error);
     return null;
   }
 }

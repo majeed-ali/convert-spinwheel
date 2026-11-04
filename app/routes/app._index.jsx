@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLoaderData, useNavigate, useFetcher, redirect } from "react-router";
+import { useLoaderData, useNavigate, useFetcher } from "react-router";
 import {
   Page,
   Layout,
@@ -18,8 +18,21 @@ import {
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getOrInitShop, syncShopSubscription, syncShopContactEmail, checkAndResetMonthlyCycle } from "../services/billing.server";
-import { PLAN_TIERS, getDynamicTierInfo } from "../services/plans";
+import {
+  getOrInitShop,
+  syncShopSubscription,
+  syncShopContactEmail,
+  checkAndResetMonthlyCycle,
+  createAutoScaleSubscription,
+} from "../services/billing.server";
+import {
+  PLAN_TIERS,
+  AUTO_SCALE_PLAN,
+  getDynamicTierInfo,
+  normalizePlanKey,
+  getImpressionLimit,
+  getEffectiveTier,
+} from "../services/plans";
 
 const NEXT_TIER_MAP = {
   FREE: "STARTER",
@@ -30,15 +43,31 @@ const NEXT_TIER_MAP = {
 };
 
 export const loader = async ({ request }) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin, session, redirect: adminRedirect } = await authenticate.admin(request);
   let shop = await getOrInitShop(session.shop, session.accessToken);
   shop = await syncShopContactEmail(admin, shop);
   shop = await syncShopSubscription(admin, shop);
   shop = await checkAndResetMonthlyCycle(shop);
 
-  // Handle direct 1-click upgrade from automated email links
   const url = new URL(request.url);
   const directUpgradeKey = url.searchParams.get("upgrade")?.toUpperCase();
+
+  // Ask once, on first open (and from the email link), for the Auto-Scale
+  // approval: $0 up front, then billed only as traffic grows. Shown a single
+  // time; merchants who decline stay on the Free plan.
+  const isFirstVisitOnFree = normalizePlanKey(shop.currentPlan) === "FREE" && !shop.billingPromptedAt;
+  if (directUpgradeKey === "AUTO" || (isFirstVisitOnFree && !directUpgradeKey)) {
+    if (!shop.billingPromptedAt) {
+      await prisma.shop.update({ where: { id: shop.id }, data: { billingPromptedAt: new Date() } });
+    }
+    if (normalizePlanKey(shop.currentPlan) !== "AUTO") {
+      const { confirmationUrl, error } = await createAutoScaleSubscription(admin, session.shop, "/app");
+      if (confirmationUrl) return adminRedirect(confirmationUrl, { target: "_top" });
+      console.error("[CS Dashboard Billing] Auto-scale prompt failed:", error);
+    }
+  }
+
+  // Legacy 1-click links for fixed-price plans
   if (directUpgradeKey && PLAN_TIERS[directUpgradeKey] && PLAN_TIERS[directUpgradeKey].price > 0) {
     const selectedTier = PLAN_TIERS[directUpgradeKey];
     const returnUrl = `https://${session.shop}/admin/apps/${process.env.SHOPIFY_API_KEY}/app`;
@@ -72,7 +101,7 @@ export const loader = async ({ request }) => {
     const json = await res.json();
     const confirmationUrl = json.data?.appSubscriptionCreate?.confirmationUrl;
     if (confirmationUrl) {
-      return redirect(confirmationUrl);
+      return adminRedirect(confirmationUrl, { target: "_top" });
     }
   }
 
@@ -103,13 +132,20 @@ export const loader = async ({ request }) => {
     orderBy: { convertedAt: "desc" },
   });
 
-  const currentPlanKey = (shop.currentPlan || "FREE").toUpperCase();
-  const currentPlanInfo = PLAN_TIERS[currentPlanKey] || PLAN_TIERS.FREE;
+  const currentPlanKey = normalizePlanKey(shop.currentPlan);
+  const isAutoScale = currentPlanKey === "AUTO";
+  const currentPlanInfo = isAutoScale ? AUTO_SCALE_PLAN : PLAN_TIERS[currentPlanKey] || PLAN_TIERS.FREE;
   const dynamicTierInfo = getDynamicTierInfo(totalImpressions, currentPlanKey);
-  const isCapExceeded = dynamicTierInfo.isSubscribedCapExceeded;
+  const isCapExceeded = totalImpressions >= getImpressionLimit(shop);
 
-  const nextPlanKey = NEXT_TIER_MAP[currentPlanKey] || "STARTER";
+  const nextPlanKey = isAutoScale ? null : NEXT_TIER_MAP[currentPlanKey] || "STARTER";
   const nextPlanInfo = PLAN_TIERS[nextPlanKey] || PLAN_TIERS.STARTER;
+  const autoScaleInfo = {
+    isActive: isAutoScale,
+    tierName: getEffectiveTier(shop).name,
+    billedThisCycle: ((shop.cycleBilledCents || 0) / 100).toFixed(2),
+    cap: AUTO_SCALE_PLAN.cappedAmount.toFixed(2),
+  };
 
   return JSON.parse(
     JSON.stringify({
@@ -125,6 +161,7 @@ export const loader = async ({ request }) => {
       isCapExceeded,
       nextPlanKey,
       nextPlanInfo,
+      autoScaleInfo,
     })
   );
 };
@@ -133,6 +170,11 @@ export const action = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const planKey = formData.get("planKey");
+
+  if (planKey === "AUTO") {
+    const result = await createAutoScaleSubscription(admin, session.shop, "/app");
+    return Response.json(result, { status: result.error ? 400 : 200 });
+  }
 
   const selectedTier = PLAN_TIERS[planKey];
   if (!selectedTier || selectedTier.price === 0) {
@@ -212,6 +254,7 @@ export default function Dashboard() {
     isCapExceeded = false,
     nextPlanKey = "STARTER",
     nextPlanInfo = PLAN_TIERS.STARTER,
+    autoScaleInfo = { isActive: false },
   } = useLoaderData() || {};
   const navigate = useNavigate();
   const fetcher = useFetcher();
@@ -270,11 +313,15 @@ export default function Dashboard() {
           <Banner
             title="⚠️ Spin Wheel Pop-Up Is Paused on Storefront"
             status="critical"
-            action={{
-              content: `⚡ Reactivate Pop-Up (Upgrade to ${nextPlanInfo.name} - $${nextPlanInfo.price.toFixed(2)}/mo)`,
-              loading: isUpgrading,
-              onAction: () => handleInstantUpgrade(nextPlanKey),
-            }}
+            action={
+              autoScaleInfo.isActive
+                ? undefined
+                : {
+                    content: "⚡ Turn On Auto-Scale & Reactivate",
+                    loading: isUpgrading,
+                    onAction: () => handleInstantUpgrade("AUTO"),
+                  }
+            }
             secondaryAction={{
               content: "View All 5 Plans",
               onAction: () => navigate("/app/billing"),
@@ -282,7 +329,10 @@ export default function Dashboard() {
           >
             <p>
               Your store has reached <strong>{totalImpressions.toLocaleString()}</strong> / {dynamicTierInfo.subscribedLimit.toLocaleString()} monthly impressions on the <strong>{dynamicTierInfo.subscribedPlanName}</strong>.
-              The spin wheel pop-up has been <strong>automatically paused</strong> on your storefront. Click below to upgrade directly with 1-click and instantly unpause your wheel!
+              The spin wheel pop-up has been <strong>automatically paused</strong> on your storefront.{" "}
+              {autoScaleInfo.isActive
+                ? "It resumes when your next 30-day cycle starts."
+                : `Turn on Auto-Scale to unpause it. You pay only for the volume you use, from $${nextPlanInfo.price.toFixed(2)} and never more than $19.99 per 30 days.`}
             </p>
           </Banner>
         ) : (
@@ -390,7 +440,20 @@ export default function Dashboard() {
               </BlockStack>
             </Box>
 
-            {/* 1-Click Instant Upgrade Action Directly Under Loader */}
+            {autoScaleInfo.isActive && (
+              <Box padding="300" background="bg-surface-success" borderRadius="200" borderWidth="025" borderColor="border-success">
+                <BlockStack gap="050">
+                  <Text variant="headingSm" fontWeight="bold">
+                    Auto-Scale is on: currently {autoScaleInfo.tierName}
+                  </Text>
+                  <Text variant="bodySm" tone="subdued">
+                    Billed this cycle: <strong>${autoScaleInfo.billedThisCycle}</strong> (maximum ${autoScaleInfo.cap} per 30 days). Your wheel keeps running as traffic grows, and the tier is adjusted automatically.
+                  </Text>
+                </BlockStack>
+              </Box>
+            )}
+
+            {/* Auto-Scale offer directly under loader */}
             {nextPlanKey && (
               <Box
                 padding="300"
@@ -403,11 +466,11 @@ export default function Dashboard() {
                   <BlockStack gap="050">
                     <Text variant="headingSm" fontWeight="bold">
                       {isCapExceeded
-                        ? `🚨 Pop-Up Paused — Upgrade to ${nextPlanInfo.name} to Reactivate`
-                        : `Ready for more volume? Upgrade to ${nextPlanInfo.name}`}
+                        ? "🚨 Pop-Up Paused: Turn On Auto-Scale to Reactivate"
+                        : "Never get paused: turn on Auto-Scale"}
                     </Text>
                     <Text variant="bodySm" tone="subdued">
-                      Includes <strong>{nextPlanInfo.monthlyImpressions.toLocaleString()} monthly impressions</strong> for only <strong>${nextPlanInfo.price.toFixed(2)}/mo</strong>. Direct 1-click Shopify approval.
+                      Free up to 1,000 impressions. Above that you pay only for the tier you reach each cycle, from <strong>${nextPlanInfo.price.toFixed(2)}</strong> and never more than <strong>$19.99 per 30 days</strong>. One-time Shopify approval.
                     </Text>
                   </BlockStack>
 
@@ -416,11 +479,9 @@ export default function Dashboard() {
                       variant="primary"
                       tone={isCapExceeded ? "critical" : undefined}
                       loading={isUpgrading}
-                      onClick={() => handleInstantUpgrade(nextPlanKey)}
+                      onClick={() => handleInstantUpgrade("AUTO")}
                     >
-                      {isCapExceeded
-                        ? `⚡ 1-Click Reactivate ($${nextPlanInfo.price.toFixed(2)}/mo)`
-                        : `⚡ Upgrade to ${nextPlanInfo.name} ($${nextPlanInfo.price.toFixed(2)}/mo)`}
+                      {isCapExceeded ? "⚡ Turn On Auto-Scale & Reactivate" : "⚡ Turn On Auto-Scale"}
                     </Button>
                     <Button variant="plain" onClick={() => navigate("/app/billing")}>
                       View All 5 Plans
@@ -442,15 +503,15 @@ export default function Dashboard() {
         </Card>
 
         {/* Modal Popup for Instant Upgrade when Cap is Reached */}
-        {showUpgradeModal && nextPlanInfo && (
+        {showUpgradeModal && nextPlanKey && (
           <Modal
             open={showUpgradeModal}
             onClose={() => setShowUpgradeModal(false)}
             title="⚠️ Monthly Free Limit Reached — Spin Wheel Paused"
             primaryAction={{
-              content: `⚡ Upgrade to ${nextPlanInfo.name} ($${nextPlanInfo.price.toFixed(2)}/mo)`,
+              content: "⚡ Turn On Auto-Scale & Reactivate",
               loading: isUpgrading,
-              onAction: () => handleInstantUpgrade(nextPlanKey),
+              onAction: () => handleInstantUpgrade("AUTO"),
             }}
             secondaryActions={[
               {
@@ -474,7 +535,7 @@ export default function Dashboard() {
                 <Card padding="400">
                   <BlockStack gap="300">
                     <InlineStack align="space-between" blockAlign="center">
-                      <Text variant="headingMd">{nextPlanInfo.name}</Text>
+                      <Text variant="headingMd">Auto-Scale Plan</Text>
                       <Badge tone="success">Instant Reactivation</Badge>
                     </InlineStack>
                     <div>
@@ -482,11 +543,14 @@ export default function Dashboard() {
                         ${nextPlanInfo.price.toFixed(2)}
                       </Text>
                       <Text variant="bodySm" tone="subdued" as="span">
-                        {" "}/ month
+                        {" "}this cycle at your current volume
                       </Text>
                     </div>
                     <Text variant="bodySm" tone="subdued">
-                      {nextPlanInfo.description}
+                      {AUTO_SCALE_PLAN.terms}
+                    </Text>
+                    <Text variant="bodySm" fontWeight="semibold">
+                      Unlocks at {nextPlanInfo.name}:
                     </Text>
                     <BlockStack gap="100">
                       {(nextPlanInfo.features || []).map((feat, idx) => (

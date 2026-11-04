@@ -1,8 +1,14 @@
 import { useState, useMemo } from "react";
-import { redirect, useLoaderData, Form } from "react-router";
+import { redirect, useLoaderData, useActionData, useNavigation, Form } from "react-router";
 import prisma from "../db.server";
-import { PLAN_TIERS, getDynamicTierInfo } from "../services/plans";
+import { PLAN_TIERS, AUTO_SCALE_PLAN, getDynamicTierInfo } from "../services/plans";
 import { checkAndResetMonthlyCycle } from "../services/billing.server";
+import {
+  countAnnouncementRecipients,
+  sendAnnouncementBatch,
+  sendAnnouncementTest,
+  ANNOUNCEMENT_BATCH_SIZE,
+} from "../services/announcement.server";
 
 export const loader = async ({ request }) => {
   const cookieHeader = request.headers.get("Cookie") || "";
@@ -56,6 +62,8 @@ export const loader = async ({ request }) => {
   let basicStores = 0;
   let growthStores = 0;
   let proStores = 0;
+  let autoStores = 0;
+  let autoRevenueCents = 0;
   let totalImpressionsMonth = 0;
   let totalLeadsCaptured = allLeads.length;
 
@@ -66,14 +74,17 @@ export const loader = async ({ request }) => {
     if (plan === "GROW") plan = "GROWTH";
     if (plan === "ADVANCED") plan = "PRO";
 
-    if (plan === "STARTER") starterStores++;
+    if (plan === "AUTO") {
+      autoStores++;
+      autoRevenueCents += shop.cycleBilledCents || 0;
+    } else if (plan === "STARTER") starterStores++;
     else if (plan === "BASIC") basicStores++;
     else if (plan === "GROWTH") growthStores++;
     else if (plan === "PRO") proStores++;
     else freeStores++;
   });
 
-  const mrr = (starterStores * 2.99 + basicStores * 5.99 + growthStores * 9.99 + proStores * 19.99).toFixed(2);
+  const mrr = (starterStores * 2.99 + basicStores * 5.99 + growthStores * 9.99 + proStores * 19.99 + autoRevenueCents / 100).toFixed(2);
   const arr = (parseFloat(mrr) * 12).toFixed(2);
   const totalAllTimeImpressions = await prisma.impressionLog.count();
 
@@ -93,13 +104,43 @@ export const loader = async ({ request }) => {
       totalImpressionsMonth,
       totalAllTimeImpressions,
       totalLeadsCaptured,
+      announcementPending: await countAnnouncementRecipients(),
+      announcementBatchSize: ANNOUNCEMENT_BATCH_SIZE,
     })
   );
 };
 
 export const action = async ({ request }) => {
+  const cookieHeader = request.headers.get("Cookie") || "";
+  if (!cookieHeader.includes("dev_admin_session=true")) {
+    return redirect("/super-admin/login");
+  }
+
   const formData = await request.formData();
   const actionType = formData.get("actionType");
+
+  if (actionType === "sendAutoScaleAnnouncementTest") {
+    const to = String(formData.get("testEmail") || "").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      return Response.json({ announcement: { error: "Enter a valid email address for the test." } });
+    }
+    const ok = await sendAnnouncementTest(to);
+    return Response.json({
+      announcement: ok
+        ? { message: `Test email sent to ${to}.` }
+        : { error: "Test email failed. Check the SMTP settings and server logs." },
+    });
+  }
+
+  if (actionType === "sendAutoScaleAnnouncement") {
+    const { sent, failed, remaining } = await sendAnnouncementBatch();
+    return Response.json({
+      announcement: {
+        message: `Sent ${sent} email(s).` + (remaining > 0 ? ` ${remaining} store(s) still pending: click Send again to continue.` : " All eligible stores have been emailed."),
+        error: failed.length ? `Failed for: ${failed.join(", ")} (will retry on the next send).` : undefined,
+      },
+    });
+  }
 
   if (actionType === "forceResetCycle") {
     const shopId = formData.get("shopId");
@@ -135,7 +176,12 @@ export default function SuperAdminDashboard() {
     totalImpressionsMonth = 0,
     totalAllTimeImpressions = 0,
     totalLeadsCaptured = 0,
+    announcementPending = 0,
+    announcementBatchSize = 50,
   } = useLoaderData() || {};
+  const actionData = useActionData();
+  const navigation = useNavigation();
+  const pendingAction = navigation.state !== "idle" ? navigation.formData?.get("actionType") : null;
 
   const [activeTab, setActiveTab] = useState("stores"); // "stores" | "leads" | "history"
   const [selectedDomain, setSelectedDomain] = useState("ALL");
@@ -398,6 +444,109 @@ export default function SuperAdminDashboard() {
           </div>
         </div>
 
+        {/* Auto-Scale announcement to existing Free stores */}
+        <div
+          style={{
+            backgroundColor: "#1E293B",
+            border: "1px solid #334155",
+            borderRadius: "14px",
+            padding: "24px",
+            marginBottom: "32px",
+            boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.3)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "24px", flexWrap: "wrap" }}>
+            <div style={{ maxWidth: "620px" }}>
+              <div style={{ fontSize: "16px", fontWeight: "700", color: "#FFFFFF", marginBottom: "6px" }}>
+                📣 Auto-Scale Announcement Email
+              </div>
+              <div style={{ fontSize: "13px", color: "#94A3B8", lineHeight: 1.6 }}>
+                One-time email to installed <strong>Free</strong> stores, inviting them to approve Auto-Scale ($0 to start, max $19.99 per 30 days).
+                Each store is emailed only once. Sends up to {announcementBatchSize} per click, busiest stores first.
+              </div>
+              <div style={{ fontSize: "14px", color: "#F8FAFC", marginTop: "10px" }}>
+                Stores not emailed yet: <strong style={{ color: "#10B981" }}>{announcementPending}</strong>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px", minWidth: "320px" }}>
+              <Form method="post" style={{ display: "flex", gap: "8px" }}>
+                <input type="hidden" name="actionType" value="sendAutoScaleAnnouncementTest" />
+                <input
+                  type="email"
+                  name="testEmail"
+                  required
+                  placeholder="your@email.com"
+                  style={{
+                    flex: 1,
+                    backgroundColor: "#0F172A",
+                    color: "#F8FAFC",
+                    border: "1px solid #475569",
+                    borderRadius: "8px",
+                    padding: "8px 12px",
+                    fontSize: "13px",
+                  }}
+                />
+                <button
+                  type="submit"
+                  disabled={!!pendingAction}
+                  style={{
+                    backgroundColor: "#334155",
+                    color: "#F8FAFC",
+                    border: "1px solid #475569",
+                    padding: "8px 14px",
+                    borderRadius: "8px",
+                    fontSize: "13px",
+                    fontWeight: "600",
+                    cursor: pendingAction ? "wait" : "pointer",
+                  }}
+                >
+                  {pendingAction === "sendAutoScaleAnnouncementTest" ? "Sending…" : "Send Test"}
+                </button>
+              </Form>
+
+              <Form
+                method="post"
+                onSubmit={(e) => {
+                  if (!window.confirm(`Send the Auto-Scale announcement to up to ${Math.min(announcementPending, announcementBatchSize)} store(s) now?`)) {
+                    e.preventDefault();
+                  }
+                }}
+              >
+                <input type="hidden" name="actionType" value="sendAutoScaleAnnouncement" />
+                <button
+                  type="submit"
+                  disabled={!!pendingAction || announcementPending === 0}
+                  style={{
+                    width: "100%",
+                    backgroundColor: announcementPending === 0 ? "#334155" : "#10B981",
+                    color: "#FFFFFF",
+                    border: "none",
+                    padding: "10px 16px",
+                    borderRadius: "8px",
+                    fontSize: "14px",
+                    fontWeight: "700",
+                    cursor: pendingAction ? "wait" : announcementPending === 0 ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {pendingAction === "sendAutoScaleAnnouncement"
+                    ? "Sending… (this can take up to a minute)"
+                    : announcementPending === 0
+                    ? "All eligible stores emailed ✓"
+                    : `Send to ${Math.min(announcementPending, announcementBatchSize)} store(s)`}
+                </button>
+              </Form>
+            </div>
+          </div>
+
+          {actionData?.announcement?.message && (
+            <div style={{ marginTop: "14px", fontSize: "13px", color: "#34D399" }}>{actionData.announcement.message}</div>
+          )}
+          {actionData?.announcement?.error && (
+            <div style={{ marginTop: "8px", fontSize: "13px", color: "#F87171" }}>{actionData.announcement.error}</div>
+          )}
+        </div>
+
         {/* Tab Navigation Switcher */}
         <div style={{ display: "flex", gap: "12px", marginBottom: "20px" }}>
           <button
@@ -521,7 +670,7 @@ export default function SuperAdminDashboard() {
                     allShops.map((shop) => {
                       const count = shop.monthlyImpressionsCount || 0;
                       const planKey = (shop.currentPlan || "FREE").toUpperCase();
-                      const tier = PLAN_TIERS[planKey] || PLAN_TIERS.FREE;
+                      const tier = planKey === "AUTO" ? AUTO_SCALE_PLAN : PLAN_TIERS[planKey] || PLAN_TIERS.FREE;
                       const dynamic = getDynamicTierInfo(count, planKey);
                       const leadsCount = shop._count?.leads || 0;
 

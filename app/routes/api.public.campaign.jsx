@@ -13,7 +13,7 @@ function parseJsonField(value, fallback) {
 }
 
 import { getOrInitShop, ensureDefaultCampaign, checkAndResetMonthlyCycle } from "../services/billing.server";
-import { PLAN_TIERS } from "../services/plans";
+import { normalizePlanKey, getImpressionLimit } from "../services/plans";
 
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
@@ -80,13 +80,9 @@ export const loader = async ({ request }) => {
   }
 
   // Check if shop has exceeded its monthly plan impression limit
-  let planKey = (shop.currentPlan || "FREE").toUpperCase();
-  if (planKey === "GROW") planKey = "GROWTH";
-  if (planKey === "ADVANCED") planKey = "PRO";
-
-  const currentPlanTier = PLAN_TIERS[planKey] || PLAN_TIERS.FREE;
+  const planKey = normalizePlanKey(shop.currentPlan);
   const currentImpressions = shop.monthlyImpressionsCount || 0;
-  const planLimit = currentPlanTier.monthlyImpressions || 1000;
+  const planLimit = getImpressionLimit(shop);
 
   if (currentImpressions >= planLimit) {
     return Response.json(

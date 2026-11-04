@@ -81,6 +81,65 @@ export const PLAN_TIERS = {
   },
 };
 
+const TIER_ORDER = ["FREE", "STARTER", "BASIC", "GROWTH", "PRO"];
+
+/**
+ * "Auto-Scale" pay-as-you-grow plan. The merchant approves ONE usage-based
+ * Shopify subscription (capped at the Pro price). After that we bill only
+ * for the tier their impression volume actually reaches each 30-day cycle,
+ * via appUsageRecordCreate — no further upgrade prompts.
+ */
+export const AUTO_SCALE_PLAN = {
+  key: "AUTO",
+  name: "Auto-Scale Plan",
+  subscriptionName: "Convert Spin Auto-Scale",
+  cappedAmount: PLAN_TIERS.PRO.price,
+  monthlyImpressions: PLAN_TIERS.PRO.monthlyImpressions,
+  badgeColor: "#10B981",
+  badgeBg: "rgba(16, 185, 129, 0.15)",
+  terms:
+    "Free up to 1,000 impressions per 30 days. Above that, billed automatically by volume: " +
+    "$2.99 up to 5,000; $5.99 up to 20,000; $9.99 up to 50,000; $19.99 up to 150,000. " +
+    "Never more than $19.99 per 30 days.",
+};
+
+export function normalizePlanKey(planKey) {
+  let key = (planKey || "FREE").toUpperCase();
+  if (key === "GROW") key = "GROWTH";
+  if (key === "ADVANCED") key = "PRO";
+  return key;
+}
+
+/** Cheapest tier whose impression allowance covers `count`. */
+export function getTierForCount(count = 0) {
+  for (const key of TIER_ORDER) {
+    if (count <= PLAN_TIERS[key].monthlyImpressions) return PLAN_TIERS[key];
+  }
+  return PLAN_TIERS.PRO;
+}
+
+/**
+ * Tier whose features the shop gets. Auto-Scale shops get the features of the
+ * tier their usage has reached (and been billed for) this cycle.
+ */
+export function getEffectiveTier(shop) {
+  const key = normalizePlanKey(shop?.currentPlan);
+  if (key === "AUTO") return getTierForCount(shop?.monthlyImpressionsCount || 0);
+  return PLAN_TIERS[key] || PLAN_TIERS.FREE;
+}
+
+/** Impressions allowed this cycle before the storefront wheel pauses. */
+export function getImpressionLimit(shop) {
+  const key = normalizePlanKey(shop?.currentPlan);
+  if (key === "AUTO") {
+    // Without a usage line item we cannot bill, so fall back to the free allowance.
+    return shop?.usageSubscriptionLineItemId
+      ? AUTO_SCALE_PLAN.monthlyImpressions
+      : PLAN_TIERS.FREE.monthlyImpressions;
+  }
+  return (PLAN_TIERS[key] || PLAN_TIERS.FREE).monthlyImpressions;
+}
+
 /**
  * Calculates dynamic tier tracking and auto-adjusting progress bar limit.
  * As impressions increase, loader automatically expands across packages:
@@ -93,11 +152,10 @@ export const PLAN_TIERS = {
  */
 export function getDynamicTierInfo(impressionsCount = 0, subscribedPlanKey = "FREE") {
   const count = Math.max(0, Number(impressionsCount) || 0);
-  let normalizedSubKey = (subscribedPlanKey || "FREE").toUpperCase();
-  if (normalizedSubKey === "GROW") normalizedSubKey = "GROWTH";
-  if (normalizedSubKey === "ADVANCED") normalizedSubKey = "PRO";
+  const normalizedSubKey = normalizePlanKey(subscribedPlanKey);
 
-  const subscribedPlan = PLAN_TIERS[normalizedSubKey] || PLAN_TIERS.FREE;
+  const subscribedPlan =
+    normalizedSubKey === "AUTO" ? AUTO_SCALE_PLAN : PLAN_TIERS[normalizedSubKey] || PLAN_TIERS.FREE;
   const subscribedLimit = subscribedPlan.monthlyImpressions || 1000;
 
   let dynamicTierKey = "FREE";

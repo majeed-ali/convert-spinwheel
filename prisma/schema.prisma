@@ -35,10 +35,13 @@ model Shop {
   id                          String          @id @default(uuid())
   shopifyDomain               String          @unique
   accessToken                 String?
-  currentPlan                 String          @default("FREE") // FREE, BASIC, GROW, ADVANCED
+  currentPlan                 String          @default("FREE") // FREE, STARTER, BASIC, GROWTH, PRO, AUTO
   monthlyImpressionsCount     Int             @default(0)
   billingCycleStartDate       DateTime        @default(now())
   usageSubscriptionLineItemId String?
+  cycleBilledCents            Int             @default(0) // AUTO plan: usage charged so far this cycle
+  billingPromptedAt           DateTime? // when the merchant was first shown the auto-scale approval
+  autoScaleAnnouncedAt        DateTime? // when the one-time Auto-Scale announcement email was sent
   klaviyoApiKey               String?
   mailchimpApiKey             String?
   sendgridApiKey              String?
