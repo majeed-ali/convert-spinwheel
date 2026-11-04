@@ -3,7 +3,7 @@ import { useLoaderData, useFetcher } from "react-router";
 import { Page, Card, Grid, Text, Button, Badge, BlockStack, InlineStack, Banner, ProgressBar, Box } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getOrInitShop, syncShopSubscription, createAutoScaleSubscription } from "../services/billing.server";
+import { getOrInitShop, syncShopSubscription, createAutoScaleSubscription, shouldUseTestCharges } from "../services/billing.server";
 import { PLAN_TIERS, AUTO_SCALE_PLAN, getDynamicTierInfo, normalizePlanKey, getEffectiveTier } from "../services/plans";
 
 export const loader = async ({ request }) => {
@@ -122,7 +122,7 @@ export const action = async ({ request }) => {
   `;
 
   try {
-    const isTestBilling = process.env.NODE_ENV !== "production";
+    const isTestBilling = await shouldUseTestCharges(admin);
     const response = await admin.graphql(mutation, {
       variables: {
         name: `Convert Spin ${selectedTier.name}`,

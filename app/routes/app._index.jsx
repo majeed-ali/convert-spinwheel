@@ -24,6 +24,7 @@ import {
   syncShopContactEmail,
   checkAndResetMonthlyCycle,
   createAutoScaleSubscription,
+  shouldUseTestCharges,
 } from "../services/billing.server";
 import {
   PLAN_TIERS,
@@ -94,7 +95,7 @@ export const loader = async ({ request }) => {
               },
             },
           ],
-          test: process.env.NODE_ENV !== "production",
+          test: await shouldUseTestCharges(admin),
         },
       }
     );
@@ -210,7 +211,7 @@ export const action = async ({ request }) => {
   `;
 
   try {
-    const isTestBilling = process.env.NODE_ENV !== "production";
+    const isTestBilling = await shouldUseTestCharges(admin);
     const response = await admin.graphql(mutation, {
       variables: {
         name: `Convert Spin ${selectedTier.name}`,

@@ -291,6 +291,33 @@ export async function syncShopSubscription(admin, shop) {
 }
 
 /**
+ * Decide whether charges for this shop must be Shopify test charges.
+ * - SHOPIFY_BILLING_TEST=true  → always test (emergency override)
+ * - SHOPIFY_BILLING_TEST=false → always real
+ * - otherwise: test outside production, and always for partner development stores
+ *   (so testing on a dev store never creates a real charge).
+ */
+export async function shouldUseTestCharges(admin) {
+  const override = (process.env.SHOPIFY_BILLING_TEST || "").toLowerCase();
+  if (override === "true") return true;
+  if (override === "false") return false;
+  if (process.env.NODE_ENV !== "production") return true;
+
+  try {
+    const res = await admin.graphql(`#graphql
+      query shopPlanForBilling {
+        shop { plan { partnerDevelopment } }
+      }
+    `);
+    const json = await res.json();
+    return Boolean(json?.data?.shop?.plan?.partnerDevelopment);
+  } catch (e) {
+    console.error("[CS Billing] Could not detect development store; using real charges:", e);
+    return false;
+  }
+}
+
+/**
  * Create the Auto-Scale usage subscription and return Shopify's confirmation URL.
  * The merchant approves once; later tier changes are billed automatically.
  */
@@ -311,7 +338,7 @@ export async function createAutoScaleSubscription(admin, shopDomain, returnPath 
     variables: {
       name: AUTO_SCALE_PLAN.subscriptionName,
       returnUrl,
-      test: process.env.NODE_ENV !== "production",
+      test: await shouldUseTestCharges(admin),
       lineItems: [
         {
           plan: {
