@@ -294,6 +294,7 @@ export async function syncShopSubscription(admin, shop) {
  * Decide whether charges for this shop must be Shopify test charges.
  * - SHOPIFY_BILLING_TEST=true  → always test (emergency override)
  * - SHOPIFY_BILLING_TEST=false → always real
+ * - SHOPIFY_BILLING_TEST_SHOPS=a.myshopify.com,b.myshopify.com → test only for these stores
  * - otherwise: test outside production, and always for partner development stores
  *   (so testing on a dev store never creates a real charge).
  */
@@ -303,14 +304,29 @@ export async function shouldUseTestCharges(admin) {
   if (override === "false") return false;
   if (process.env.NODE_ENV !== "production") return true;
 
+  const testShops = (process.env.SHOPIFY_BILLING_TEST_SHOPS || "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
   try {
     const res = await admin.graphql(`#graphql
       query shopPlanForBilling {
-        shop { plan { partnerDevelopment } }
+        shop { myshopifyDomain plan { partnerDevelopment publicDisplayName } }
       }
     `);
     const json = await res.json();
-    return Boolean(json?.data?.shop?.plan?.partnerDevelopment);
+    const shop = json?.data?.shop;
+    const domain = (shop?.myshopifyDomain || "").toLowerCase();
+    const isListed = testShops.includes(domain);
+    const isPartnerDev = Boolean(shop?.plan?.partnerDevelopment);
+    const useTest = isListed || isPartnerDev;
+
+    console.log(
+      `[CS Billing] ${domain || "unknown shop"}: plan="${shop?.plan?.publicDisplayName}", ` +
+        `partnerDevelopment=${isPartnerDev}, inTestList=${isListed} → ${useTest ? "TEST" : "REAL"} charge`
+    );
+    return useTest;
   } catch (e) {
     console.error("[CS Billing] Could not detect development store; using real charges:", e);
     return false;
