@@ -716,7 +716,9 @@ export default function SuperAdminDashboard() {
                                     fontWeight: "700",
                                   }}
                                 >
-                                  {planLabel} (${tier.price.toFixed(2)}/mo)
+                                  {planKey === "AUTO"
+                                    ? `${planLabel} ($${((shop.cycleBilledCents || 0) / 100).toFixed(2)} this cycle)`
+                                    : `${planLabel} ($${Number(tier.price || 0).toFixed(2)}/mo)`}
                                 </span>
 
                                 {dynamic.isSubscribedCapExceeded && (
@@ -1372,7 +1374,8 @@ export default function SuperAdminDashboard() {
                     </tr>
                   ) : (
                     allBillingHistory.map((item) => {
-                      const tier = PLAN_TIERS[item.planKey] || PLAN_TIERS.FREE;
+                      const tier =
+                        item.planKey === "AUTO" ? AUTO_SCALE_PLAN : PLAN_TIERS[item.planKey] || PLAN_TIERS.FREE;
                       const planColor = tier.badgeColor || "#38BDF8";
                       const planBg = tier.badgeBg || "rgba(56, 189, 248, 0.15)";
                       const startDate = item.cycleStartDate ? new Date(item.cycleStartDate).toLocaleDateString() : "-";
