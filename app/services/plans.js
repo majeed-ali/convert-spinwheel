@@ -1,3 +1,16 @@
+// Every plan includes every feature; plans differ only by impressions per 30-day cycle.
+// Keep this list limited to features the app actually ships (App Store requirement 4.2.1).
+export const INCLUDED_FEATURES = [
+  "Every ConvertSpin feature included",
+  "Unique Shopify discount code for each winner",
+  "Email & optional phone capture",
+  "Exit-intent, scroll, time-delay & cart-value triggers",
+  "Klaviyo, Mailchimp & SendGrid sync",
+  "Leads dashboard & CSV export",
+];
+
+const withImpressions = (count) => [`${count.toLocaleString("en-US")} impressions per 30 days`, ...INCLUDED_FEATURES];
+
 export const PLAN_TIERS = {
   FREE: {
     key: "FREE",
@@ -6,14 +19,8 @@ export const PLAN_TIERS = {
     price: 0.0,
     badgeColor: "#38BDF8",
     badgeBg: "rgba(56, 189, 248, 0.15)",
-    description: "Ideal for new stores testing the spin wheel engine.",
-    features: [
-      "1,000 monthly impressions",
-      "1 active spin wheel campaign",
-      "Standard spin & win pop-up",
-      "Powered by Convert Spin watermark",
-      "Standard email collection",
-    ],
+    description: "For new stores getting started with a spin wheel.",
+    features: withImpressions(1000),
   },
   STARTER: {
     key: "STARTER",
@@ -22,14 +29,8 @@ export const PLAN_TIERS = {
     price: 2.99,
     badgeColor: "#34D399",
     badgeBg: "rgba(52, 211, 153, 0.15)",
-    description: "Perfect for budding stores wanting a clean, branded experience.",
-    features: [
-      "5,000 monthly impressions",
-      "Remove 'Powered by' watermark",
-      "Custom brand colors & typography",
-      "Email & phone number capture",
-      "Custom floating launcher button",
-    ],
+    description: "For growing stores with steady daily traffic.",
+    features: withImpressions(5000),
   },
   BASIC: {
     key: "BASIC",
@@ -38,14 +39,8 @@ export const PLAN_TIERS = {
     price: 5.99,
     badgeColor: "#60A5FA",
     badgeBg: "rgba(96, 165, 250, 0.15)",
-    description: "Our core volume plan for active stores seeking more conversions.",
-    features: [
-      "20,000 monthly impressions",
-      "Multiple active campaigns",
-      "Exit-intent & scroll depth triggers",
-      "Cart value minimum targeting",
-      "Detailed lead analytics & CSV export",
-    ],
+    description: "For active stores with regular campaigns and promotions.",
+    features: withImpressions(20000),
   },
   GROWTH: {
     key: "GROWTH",
@@ -54,14 +49,8 @@ export const PLAN_TIERS = {
     price: 9.99,
     badgeColor: "#818CF8",
     badgeBg: "rgba(129, 140, 248, 0.15)",
-    description: "For scaling brands needing automated email marketing sync.",
-    features: [
-      "50,000 monthly impressions",
-      "Klaviyo, Mailchimp & Omnisend sync",
-      "Time delay & page-specific smart rules",
-      "Campaign performance & revenue tracking",
-      "Scheduled flash sale spin wheels",
-    ],
+    description: "For scaling brands with high storefront traffic.",
+    features: withImpressions(50000),
   },
   PRO: {
     key: "PRO",
@@ -70,14 +59,8 @@ export const PLAN_TIERS = {
     price: 19.99,
     badgeColor: "#F59E0B",
     badgeBg: "rgba(245, 158, 11, 0.15)",
-    description: "Maximum capacity and advanced tools for high-volume stores.",
-    features: [
-      "150,000 monthly impressions",
-      "Unlimited spin wheel campaigns",
-      "Built-in A/B split testing engine",
-      "All marketing integrations included",
-      "Priority 24/7 developer support",
-    ],
+    description: "For high-volume stores that need the most impressions.",
+    features: withImpressions(150000),
   },
 };
 

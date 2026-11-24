@@ -340,7 +340,7 @@ export async function sendSubscriptionUpgradedEmail({
     </div>
 
     <p style="font-size: 14px; line-height: 1.6; color: #475569;">
-      Your wheel pop-up will run uninterrupted without the Free watermark and with full access to all your plan features.
+      Your wheel pop-up now has a higher monthly impression allowance, so it keeps running for more of your visitors.
     </p>
 
     <div class="btn-container">

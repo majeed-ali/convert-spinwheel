@@ -551,7 +551,7 @@ export default function Dashboard() {
                       {AUTO_SCALE_PLAN.terms}
                     </Text>
                     <Text variant="bodySm" fontWeight="semibold">
-                      Unlocks at {nextPlanInfo.name}:
+                      Included at {nextPlanInfo.name}:
                     </Text>
                     <BlockStack gap="100">
                       {(nextPlanInfo.features || []).map((feat, idx) => (

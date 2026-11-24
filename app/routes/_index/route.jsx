@@ -2,6 +2,14 @@ import { redirect, Form, useLoaderData } from "react-router";
 import { login } from "../../shopify.server";
 import styles from "./styles.module.css";
 
+export const meta = () => [
+  { title: "ConvertSpin: Spin Wheel Popup for Shopify" },
+  {
+    name: "description",
+    content: "Spin-to-win popup for Shopify that captures emails and gives every winner a unique discount code.",
+  },
+];
+
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
 
@@ -18,9 +26,10 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>ConvertSpin: Spin Wheel Popup for Shopify</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Turn store visitors into subscribers with a spin-to-win popup. Visitors enter their email for a chance
+          to win a discount, and every winner gets a unique Shopify discount code.
         </p>
         {showForm && (
           <Form className={styles.form} method="post" action="/auth/login">
@@ -36,18 +45,21 @@ export default function App() {
         )}
         <ul className={styles.list}>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Your wheel, your prizes</strong>. Set the prizes, colors and win odds, and choose when the
+            wheel appears: on exit intent, after scrolling, after a time delay or above a minimum cart value.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Real discount codes</strong>. Each winner receives a unique Shopify discount code, so offers
+            can't be shared or reused.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Leads where you need them</strong>. Capture emails and optional phone numbers, export them as
+            CSV, or sync them to Klaviyo, Mailchimp or SendGrid.
           </li>
         </ul>
+        <p className={styles.text}>
+          Free for up to 1,000 impressions per 30 days. <a href="/pricing">See all plans and pricing</a>.
+        </p>
       </div>
     </div>
   );

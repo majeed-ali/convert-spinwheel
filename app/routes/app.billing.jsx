@@ -184,7 +184,7 @@ export default function BillingPage() {
   const isSubmitting = fetcher.state !== "idle";
 
   return (
-    <Page title="Plans & Impression Tier Billing" subtitle="Simple, transparent impression-based plans with feature unlocks and predictable pricing.">
+    <Page title="Plans & Impression Tier Billing" subtitle="Every plan includes every feature. Plans differ only by impressions per 30 days.">
       <BlockStack gap="500">
         {fetcher.data?.error && (
           <Banner status="critical" title="Billing Error">
